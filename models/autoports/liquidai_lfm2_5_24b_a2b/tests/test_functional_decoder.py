@@ -38,6 +38,7 @@ from .harness import (
 )
 
 PCC_BAR = 0.995
+DELTA_PCC_BAR = 0.99  # PCC of the layer update out - x (see delta_pccs); set from the functional baseline
 LAYERS = {"conv_dense": 0, "conv_moe": 3, "attn_moe": 2}
 
 
@@ -66,6 +67,7 @@ def run_case(
     max_seq_len=None,
     kv_dtype=ttnn.bfloat16,
     reserve_seqs=None,
+    decoder_factory=None,
 ):
     logger.info(f"TT_METAL_TRACE_ALLOC_TRACKING={os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING')}")
     cfg = hf_config()
@@ -84,8 +86,7 @@ def run_case(
         u.ref = hf_layer_forward(hf_layer, hf_rope, u.x.unsqueeze(0))[0]
     del hf_layer
 
-    decoder = FunctionalDecoder.from_state_dict(sd, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device)
-    rope = RopeSetup(mesh_device, args, max_seq_len=max(max_seq_len, TILE)) if decoder.is_attention else None
+    decoder, rope = make_decoder(decoder_factory, sd, cfg, args, layer_idx, mesh_device, max(max_seq_len, TILE))
     layout = PagedLayout(users, max_seq_len, reserve_seqs=reserve_seqs)
     if decoder.is_attention:
         decoder.mixer.allocate_kv_cache(layout.num_blocks, layout.block_size, dtype=kv_dtype)
@@ -141,12 +142,41 @@ def run_case(
         p_pcc = pcc(u.tt_prefill, u.ref[: u.prompt_len])
         d_ref = u.ref[u.prompt_len : u.prompt_len + u.decode_steps]
         d_pcc = pcc(torch.stack(u.tt_decode), d_ref) if u.decode_steps else 1.0
+        dp, dd = delta_pccs(u)
         logger.info(
             f"layer {layer_idx} ({args.layer_kind(layer_idx)}) slot {u.slot} prompt {u.prompt_len} "
-            f"decode {u.decode_steps}: prefill PCC {p_pcc:.6f} decode PCC {d_pcc:.6f} real={real}"
+            f"decode {u.decode_steps}: prefill PCC {p_pcc:.6f} decode PCC {d_pcc:.6f} "
+            f"delta PCC {dp:.6f}/{dd:.6f} real={real}"
         )
         results.append((u, p_pcc, d_pcc))
     return results
+
+
+def delta_pccs(u):
+    """PCC of the layer's update ``out - x`` (residual removed) for prefill and decode rows.
+
+    The layer output is dominated by the residual input, so a broken mixer/FFN can still show a
+    high output PCC; the update PCC is the sensitive check."""
+    n = u.prompt_len
+    p = pcc(u.tt_prefill - u.x[:n], u.ref[:n] - u.x[:n])
+    if not u.tt_decode:
+        u.delta = (p, 1.0)
+        return u.delta
+    m = len(u.tt_decode)
+    d = pcc(torch.stack(u.tt_decode) - u.x[n : n + m], u.ref[n : n + m] - u.x[n : n + m])
+    u.delta = (p, d)
+    return p, d
+
+
+def functional_factory(sd, cfg, args, layer_idx, mesh_device, max_seq_len):
+    decoder = FunctionalDecoder.from_state_dict(sd, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device)
+    rope = RopeSetup(mesh_device, args, max_seq_len=max_seq_len) if decoder.is_attention else None
+    return decoder, rope
+
+
+def make_decoder(factory, sd, cfg, args, layer_idx, mesh_device, max_seq_len):
+    """``factory(sd, cfg, args, layer_idx, mesh_device, max_seq_len) -> (decoder, rope_or_None)``."""
+    return (factory or functional_factory)(sd, cfg, args, layer_idx, mesh_device, max_seq_len)
 
 
 def _snapshot_state(decoder):
@@ -166,6 +196,12 @@ def _assert(results):
     for u, p, d in results:
         assert p >= PCC_BAR, f"slot {u.slot} prefill PCC {p}"
         assert d >= PCC_BAR, f"slot {u.slot} decode PCC {d}"
+        # Update-PCC bar applies to real weights only: with synthetic weights the HF reference itself
+        # run in bf16 scores 0.9196 on one batch32 conv_moe user (TT: 0.9199) because a near-tie flips
+        # that token's expert selection (doc/fused_decoder/work_log.md, synthetic-weight control).
+        dp, dd = getattr(u, "delta", (1.0, 1.0))
+        if _use_real():
+            assert dp >= DELTA_PCC_BAR and dd >= DELTA_PCC_BAR, f"slot {u.slot} update (out - x) PCC {dp}/{dd}"
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -225,7 +261,7 @@ BG_SLOTS = (2, 20)
 SCRATCH_SLOT = TILE - 1
 
 
-def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size):
+def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size, decoder_factory=None):
     """Serving-like schedule on one decoder instance with ONE captured decode trace.
 
     Background users (slots ``BG_SLOTS``) are prefilled first and then decode on every replay.
@@ -257,8 +293,7 @@ def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size):
         u.ref = hf_layer_forward(hf_layer, hf_rope, u.x.unsqueeze(0))[0]
     del hf_layer
 
-    decoder = FunctionalDecoder.from_state_dict(sd, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device)
-    rope = RopeSetup(mesh_device, args, max_seq_len=max_seq) if decoder.is_attention else None
+    decoder, rope = make_decoder(decoder_factory, sd, cfg, args, layer_idx, mesh_device, max_seq)
     layout = PagedLayout(users + [scratch], max_seq)
     if decoder.is_attention:
         decoder.mixer.allocate_kv_cache(layout.num_blocks, layout.block_size)
@@ -325,9 +360,11 @@ def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size):
         n = len(u.tt_decode)
         p = pcc(u.tt_prefill, u.ref[: u.prompt_len])
         d = pcc(torch.stack(u.tt_decode), u.ref[u.prompt_len : u.prompt_len + n])
+        dp, dd = delta_pccs(u)
         logger.info(
             f"interleaved layer {layer_idx} slot {u.slot} prompt {u.prompt_len} decode {n} "
-            f"(delay {u.join_delay}): prefill PCC {p:.6f} decode PCC {d:.6f} real={_use_real()}"
+            f"(delay {u.join_delay}): prefill PCC {p:.6f} decode PCC {d:.6f} delta PCC {dp:.6f}/{dd:.6f} "
+            f"real={_use_real()}"
         )
         results.append((u, p, d))
     return results

@@ -1,0 +1,7 @@
+device time per pass from tt-perf-report --csv 'Device Time' (us); decode window = 5 replays
+conv_dense prefill functional     5652.7 us (35 ops, complete=True)  fused     5099.7 us (32 ops, complete=True)  speedup 1.108x
+conv_dense decode  functional      687.3 us (22 ops, complete=True)  fused      685.0 us (20 ops, complete=True)  speedup 1.003x
+conv_moe   prefill functional   424736.8 us (115 ops, complete=True)  fused   355490.3 us (103 ops, complete=True)  speedup 1.195x
+conv_moe   decode  functional     7102.1 us (51 ops, complete=True)  fused     6056.9 us (41 ops, complete=True)  speedup 1.173x
+attn_moe   prefill functional   415325.4 us (107 ops, complete=True)  fused   337339.9 us (90 ops, complete=True)  speedup 1.231x
+attn_moe   decode  functional     7501.0 us (67 ops, complete=True)  fused     6142.1 us (52 ops, complete=True)  speedup 1.221x

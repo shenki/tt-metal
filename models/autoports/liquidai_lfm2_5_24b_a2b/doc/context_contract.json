@@ -53,5 +53,13 @@
     "full_batch_full_context_kv_bf16_per_chip_gib_kv_heads_sharded_over_4": 20.0,
     "full_batch_full_context_kv_bfp8_per_chip_gib": 10.6,
     "note": "Full-model fit (weights + 32x131072 KV on 4x32 GB p150b) is re-verified in the multichip/full-model stages; shortconv state is O(batch) and independent of context."
+  },
+  "fused_decoder": {
+    "largest_prefill_tested": 131069,
+    "largest_decode_position_tested": 131071,
+    "test": "models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_fused_decoder.py::test_fused_full_context",
+    "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/fused_decoder/logs/pytest_fused_real_weights_all.log",
+    "capacity_change": null,
+    "note": "fusions change no dtype or KV layout; bf16 weights and KV as in the functional decoder"
   }
 }

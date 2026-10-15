@@ -17,6 +17,7 @@ restored state must be identical.  Tracy signposts ``PERF_PREFILL``/``PERF_PREFI
 """
 
 import contextlib
+import time
 
 import pytest
 import torch
@@ -25,7 +26,7 @@ from torch.overrides import TorchFunctionMode
 
 import ttnn
 
-from ..tt.functional_decoder import ConvPrefillInputs, FunctionalDecoder, RopeSetup
+from ..tt.functional_decoder import ConvPrefillInputs
 from ..tt.model_config import TILE, Lfm2MoeArgs
 from .harness import (
     DecodeInputs,
@@ -39,7 +40,7 @@ from .harness import (
     pad_page_table_row,
     to_dev,
 )
-from .test_functional_decoder import LAYERS, _real_embed, _restore_state, _snapshot_state, _use_real
+from .test_functional_decoder import LAYERS, _real_embed, _restore_state, _snapshot_state, _use_real, make_decoder
 
 PREFILL_LEN = 2048
 DECODE_ITERS = 5  # keeps every replay inside the device-profiler buffer
@@ -113,15 +114,18 @@ def _prefill_inputs(decoder, mesh_device, layout, user, rope):
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("kind", list(LAYERS))
 def test_perf_determinism_no_fallback(mesh_device, kind):
+    run_perf_determinism(mesh_device, kind)
+
+
+def run_perf_determinism(mesh_device, kind, decoder_factory=None, decode_iters=DECODE_ITERS):
     layer_idx = LAYERS[kind]
     cfg = hf_config()
     args = Lfm2MoeArgs.from_hf_config(cfg)
     H = args.hidden_size
     sd = layer_state_dict(layer_idx, _use_real())
     embed = _real_embed()
-    decoder = FunctionalDecoder.from_state_dict(sd, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device)
     max_seq = PREFILL_LEN + 2 * TILE
-    rope = RopeSetup(mesh_device, args, max_seq_len=max_seq) if decoder.is_attention else None
+    decoder, rope = make_decoder(decoder_factory, sd, cfg, args, layer_idx, mesh_device, max_seq)
     users = [User(slot=s, prompt_len=PREFILL_LEN, decode_steps=1, seed=900 + s) for s in range(TILE)]
     layout = PagedLayout(users, max_seq)
     if decoder.is_attention:
@@ -136,9 +140,11 @@ def test_perf_determinism_no_fallback(mesh_device, kind):
     ttnn.deallocate(out)
     ttnn.synchronize_device(mesh_device)
     signpost("PERF_PREFILL")
+    t0 = time.perf_counter()
     with no_host_fallback():
         out = decoder.prefill_forward(tt_x, **kw)
     ttnn.synchronize_device(mesh_device)
+    prefill_s = time.perf_counter() - t0
     signpost("PERF_PREFILL_END")
     second = from_dev(out, mesh_device)
     ttnn.deallocate(out)
@@ -173,12 +179,15 @@ def test_perf_determinism_no_fallback(mesh_device, kind):
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
     signpost("PERF_DECODE")
+    t0 = time.perf_counter()
     with no_host_fallback():
-        for _ in range(DECODE_ITERS):
+        for _ in range(decode_iters):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
+    decode_s = (time.perf_counter() - t0) / decode_iters
     signpost("PERF_DECODE_END")
     ttnn.release_trace(mesh_device, trace_id)
     logger.info(
-        f"{kind}: prefill {PREFILL_LEN} deterministic, traced decode x{DECODE_ITERS} deterministic, no host fallback"
+        f"{kind}: prefill {PREFILL_LEN} deterministic, traced decode x{decode_iters} deterministic, no host fallback"
     )
+    return {"prefill_ms": prefill_s * 1e3, "decode_us": decode_s * 1e6}

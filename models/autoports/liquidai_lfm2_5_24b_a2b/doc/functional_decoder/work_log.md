@@ -128,3 +128,5 @@ conv_moe layer-output PCC is a weak detector for conv-mixer bugs (conv_dense cat
 mixer-level PCC in later stages), MoE dense work and per-S_pad prefill programs (stage 2/3 and
 generator concerns).
 - Commit hooks (black/isort/autoflake/whitespace) reformatted stage files and dropped unused imports; post-format smoke: 12 selected tests (batch32, 65-2048, slot_reuse, perf_determinism) pass under TT_METAL_TRACE_ALLOC_TRACKING=1.
+
+Stage 1 local commit (not pushed): tt-metal branch `autoport/lfm2_5_24b_a2b` `799a0875`.

@@ -110,6 +110,7 @@ class User:
     tt_prefill: torch.Tensor = None
     tt_decode: list = field(default_factory=list)
     join_delay: int = 0  # decode replays (for other slots) between this request's prefill and its first decode
+    delta: tuple = (1.0, 1.0)  # (prefill, decode) PCC of out - x, filled by the test
 
 
 class PagedLayout:
