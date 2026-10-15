@@ -1,0 +1,57 @@
+{
+  "model": "LiquidAI/LFM2.5-24B-A2B",
+  "revision": "1769516ac588c4c558089c94f27d96b0dc67b183",
+  "hf_advertised_context": 131072,
+  "hf_advertised_context_source": "config.json max_position_embeddings",
+  "current_supported_context": 131072,
+  "capability_reduction": null,
+  "functional_decoder": {
+    "largest_prefill_tested": 131069,
+    "largest_decode_position_tested": 131071,
+    "largest_total_context_tested": 131072,
+    "prefill_chunk_size_tested": [
+      128,
+      256,
+      2048
+    ],
+    "test": "models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_functional_decoder.py::test_decoder_full_context",
+    "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/functional_decoder/logs/pytest_real_weights_all.log",
+    "layer_kinds": [
+      "conv_dense (layer 0)",
+      "conv_moe (layer 3)",
+      "attn_moe (layer 2)"
+    ],
+    "decode_batch": 32,
+    "kv_cache_reserved_in_full_context_test": "65537 blocks x 64 tokens x 8 kv heads x 64 dim, bf16, K and V = 32 users x 131072 tokens = 8 GiB for one attention layer on one Blackhole p150b",
+    "non_aligned_lengths_tested": [
+      1,
+      31,
+      33,
+      65,
+      77,
+      300,
+      2047,
+      2049,
+      4100,
+      131069
+    ],
+    "decode_positions_at_full_context": [
+      131069,
+      131070,
+      131071
+    ],
+    "aligned_lengths_tested": [
+      32,
+      64,
+      2048
+    ]
+  },
+  "capacity_notes": {
+    "kv_bytes_per_token_per_attention_layer_bf16": 2048,
+    "attention_layers": 10,
+    "full_batch_full_context_kv_bf16_total_gib": 80.0,
+    "full_batch_full_context_kv_bf16_per_chip_gib_kv_heads_sharded_over_4": 20.0,
+    "full_batch_full_context_kv_bfp8_per_chip_gib": 10.6,
+    "note": "Full-model fit (weights + 32x131072 KV on 4x32 GB p150b) is re-verified in the multichip/full-model stages; shortconv state is O(batch) and independent of context."
+  }
+}
