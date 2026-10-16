@@ -2054,6 +2054,40 @@ def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batc
     )
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("vocab_size,constrain_grid", [(32768, True), (262144, False)])
+def test_grammar_unpack_single_device(vocab_size, constrain_grid, mesh_device):
+    """Wide rows fit L1; ordinary constrained grids keep their supported cast path."""
+    args = _single_device_sampling_args(mesh_device, vocab_size)
+    if not constrain_grid:
+        args.sub_core_grids = None
+        args.sub_core_grid_topk = None
+    sampling = TTSampling(
+        args=args,
+        mesh_device=mesh_device,
+        tt_ccl=None,
+    )
+    sampling.enable_device_grammar()
+    for allowed_token in (vocab_size - 1, 12345):
+        mask = torch.zeros((1, vocab_size // 32), dtype=torch.int32)
+        bit = 1 << (allowed_token % 32)
+        mask[0, allowed_token // 32] = bit if bit < (1 << 31) else bit - (1 << 32)
+        sampling.update_grammar_bitmask(mask)
+        logits = ttnn.from_torch(
+            torch.zeros((1, 1, 32, vocab_size), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+        )
+        sampling._apply_grammar_bitmask(logits)
+        host = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).reshape(32, vocab_size)
+        finite = torch.isfinite(host)
+        assert finite[0].sum().item() == 1
+        assert finite[0, allowed_token]
+        assert torch.all(finite[1:]), "Unrestricted padded rows must retain their logits"
+        ttnn.deallocate(logits)
+
+
 @pytest.mark.parametrize(
     "vocab_size",
     [

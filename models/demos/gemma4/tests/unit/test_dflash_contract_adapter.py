@@ -62,6 +62,7 @@ def test_declares_the_contract_rail(adapter):
     assert caps["spec_requirements"] == ("device_propose",)
     assert caps["spec_hidden_handoff"] == ("on_device",)
     assert caps["supports_sample_on_device"] is True
+    assert caps.get("supports_device_grammar", False) is False
     assert caps["max_device_top_k"] == 32
     assert caps["supports_device_penalties"] is False
     assert caps["supports_chunked_prefill"] is True
@@ -70,9 +71,11 @@ def test_declares_the_contract_rail(adapter):
 
 
 def test_block_output_adapters_do_not_inherit_contract_sampling_limits(adapter):
+    assert adapter.Gemma4ForCausalLM.model_capabilities["supports_device_grammar"] is True
     for cls in (adapter.Gemma4DFlashForCausalLM, adapter.Gemma4MTPForCausalLM):
         assert cls.model_capabilities["output_tokens_per_step"] > 1
         assert "max_device_top_k" not in cls.model_capabilities
+        assert "supports_device_grammar" not in cls.model_capabilities
         assert "supports_device_penalties" not in cls.model_capabilities
 
 

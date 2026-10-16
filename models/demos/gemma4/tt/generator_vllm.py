@@ -349,6 +349,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # align_num_cached_tokens_to_sdpa applies locally.
         "resumed_prefill_token_alignment": SDPA_CHUNK_ALIGN,
         "supports_sample_on_device": True,
+        # The shared sampler owns a persistent packed grammar-mask buffer and
+        # applies it before temperature/top-k. One device reduces the vocabulary
+        # in chunks; multi-device sampling requires shards no wider than 64k.
+        # __init__ narrows this capability when that sampler was not built.
+        "supports_device_grammar": True,
+        "max_device_top_k": 32,
         # prefill_forward_text routes a nonzero start_pos to the chunked SDPA and
         # floors the offset to resumed_prefill_token_alignment, so a prompt split
         # across engine steps needs no new prefill code.
@@ -429,21 +435,23 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             }
         # On-device decode sampling only exists when Gemma4Model actually built a
         # SamplingGenerator. That needs the per-device vocab shard to fit ttnn's
-        # 64k topk width: Gemma4's vocab is 262144, so TP>=4 shards to <=65536 and
-        # works, but TP=2 (WH N300 1x2) shards to 131072 and Gemma4Model leaves
-        # ``self.sampling = None``. Narrow the instance dict so runtime readers
+        # 64k topk width on each TP shard. TP=1 uses same-device chunk reduction;
+        # TP>=4 shards the 262144 vocab to <=65536. TP=2 still leaves sampling
+        # unavailable. Narrow the instance dict so runtime readers
         # see False. The platform already snapshot the class attribute, so this
         # does not revise sample_on_device_mode.
         if model0 is not None and not bool(getattr(model0, "_supports_on_device_sampling", True)):
             self.model_capabilities = {
                 **self.model_capabilities,
                 "supports_sample_on_device": False,
+                "supports_device_grammar": False,
             }
             _tp = getattr(getattr(model0, "mesh_config", None), "tp", "?")
             logger.info(
                 f"Gemma4: on-device sampling unavailable on this mesh (tp={_tp}, "
                 f"vocab={getattr(model0, 'vocab_size', '?')} shards wider than ttnn topk's 64k); "
-                "advertising supports_sample_on_device=False so decode samples on host."
+                "advertising supports_sample_on_device=False and "
+                "supports_device_grammar=False so decode samples on host."
             )
         # Host-side TTFT / decode tok/s for metal↔server parity checks.
         # Compare these to demo ``inference_prefill`` / decode tok/s/user logs.
@@ -3608,7 +3616,11 @@ class Gemma4DFlashForCausalLM(Gemma4DFlashBase):
     _SPEC_BLOCK = int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64"))
 
     model_capabilities = {
-        **Gemma4ForCausalLM.model_capabilities,
+        **{
+            key: value
+            for key, value in Gemma4ForCausalLM.model_capabilities.items()
+            if key not in ("supports_device_grammar", "max_device_top_k")
+        },
         # Pinned off: _spec_pt_identity keys sessions on a request's first block id.
         "supports_prefix_caching": False,
         # Async overlaps host scheduling with the device decode for the ADAPTIVE
@@ -4068,7 +4080,11 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
     _SPEC_DECLINES_AT_RING_WRAP = True
 
     model_capabilities = {
-        **Gemma4ForCausalLM.model_capabilities,
+        **{
+            key: value
+            for key, value in Gemma4ForCausalLM.model_capabilities.items()
+            if key not in ("supports_device_grammar", "max_device_top_k")
+        },
         # Pinned off on spec rails: _spec_pt_identity keys sessions on a
         # request's first block id, which shared prefixes would collide.
         "supports_prefix_caching": False,
@@ -5075,7 +5091,11 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
     _SPEC_N = _SPEC_K + 1
 
     model_capabilities = {
-        **Gemma4ForCausalLM.model_capabilities,
+        **{
+            key: value
+            for key, value in Gemma4ForCausalLM.model_capabilities.items()
+            if key not in ("supports_device_grammar", "max_device_top_k")
+        },
         # Pinned off on spec rails: _spec_pt_identity keys sessions on a
         # request's first block id, which shared prefixes would collide.
         "supports_prefix_caching": False,

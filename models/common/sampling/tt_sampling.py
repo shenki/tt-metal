@@ -578,6 +578,15 @@ class TTSampling(LightweightModule):
         )
         ttnn.deallocate(shifted)
 
+        # Bits are exactly 0/1. A full 262144-token uint32 row needs >2MB of
+        # reshape dataflow buffers; BF16 fits Blackhole's L1. Row-major typecast
+        # cannot use sub_core_grids, so retain the existing tiled conversion on
+        # constrained grids and ordinary TP shards.
+        cast_before_reshape = local_vocab_width > 2 * TOPK_MAX_WIDTH and self.sub_core_grids is None
+        if cast_before_reshape:
+            allowed_bf16 = ttnn.typecast(allowed_bits, ttnn.bfloat16)
+            ttnn.deallocate(allowed_bits)
+            allowed_bits = allowed_bf16
         unpacked = ttnn.reshape(
             allowed_bits,
             (1, 1, self.max_batch_size, local_vocab_width),
@@ -589,13 +598,11 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.sub_core_grids,
         )
         ttnn.deallocate(allowed_bits)
-
-        allowed = ttnn.typecast(
-            allowed_tiled,
-            ttnn.bfloat16,
-            sub_core_grids=self.sub_core_grids,
-        )
-        ttnn.deallocate(allowed_tiled)
+        if cast_before_reshape:
+            allowed = allowed_tiled
+        else:
+            allowed = ttnn.typecast(allowed_tiled, ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+            ttnn.deallocate(allowed_tiled)
 
         additive_mask = ttnn.where(
             allowed,

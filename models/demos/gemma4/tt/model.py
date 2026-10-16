@@ -23,6 +23,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
@@ -614,9 +615,14 @@ class Gemma4Model:
 
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
-        if is_mesh and tp > 1:
+        if is_mesh:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
-            if per_device_padded <= 64 * 1024:
+            single_device_splits = (
+                TTSampling.num_single_device_vocab_splits(per_device_padded)
+                if mesh_device.get_num_devices() == 1
+                else None
+            )
+            if per_device_padded <= 64 * 1024 or single_device_splits is not None:
                 sampling_args = self._make_sampling_args(hf_config, mesh_device, tp, mesh_config)
                 # Match sampling all-gather topology to Gemma4 CCLManager (Ring on
                 # BH≥8, Linear elsewhere / GEMMA4_CCL_TOPOLOGY). Without this,
@@ -745,7 +751,16 @@ class Gemma4Model:
             args.sampling_dp = mesh_device.shape[0]
             args.is_galaxy = mesh_device.shape[0] > 1
         args.num_devices = mesh_device.get_num_devices()
-        args.model_config = {}
+        # Single-device greedy skips collectives; wider sampled vocabularies use
+        # TTSampling's existing same-device chunk reduction. Multi-device model
+        # construction overrides the links/topology from its CCL manager.
+        args.model_config = {
+            "SAMPLING_AG_CONFIG": {
+                "allow_force_argmax": True,
+                "num_links": 1,
+                "topology": ttnn.Topology.Linear,
+            }
+        }
         args.use_topk_logprobs = False
         # vLLM path: same-seed requests must reproduce identically (n>1 children already
         # arrive with distinct seeds), so keep SeedManager salting off, as llama3_70b_galaxy does.

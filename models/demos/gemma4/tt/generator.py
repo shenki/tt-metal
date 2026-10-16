@@ -33,6 +33,7 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
+    DeferredDecodeSampling,
     Generator,
     _pad_or_create_page_table,
     batched_prefill_padded_batch,
@@ -1508,7 +1509,7 @@ class ChunkedPrefillPageTableGuardMixin:
             wrote = True
         return wrote
 
-    def sample_decode_on_device(
+    def _sample_decode(
         self,
         tt_logits,
         sampling_params,
@@ -1522,10 +1523,11 @@ class ChunkedPrefillPageTableGuardMixin:
         reset_sampling_state: bool,
         reload_inputs: bool | None = None,
         skip_precompile: bool = False,
+        grammar_bitmask: torch.Tensor | None = None,
     ):
         """Eager ``tt_out_tok`` inject for padded decode feedback (#51186).
 
-        Shared ``Generator.sample_decode_on_device`` only passes ``tt_out_tok`` when
+        Shared ``Generator._sample_decode`` only passes ``tt_out_tok`` when
         the sampling *trace* is enabled. Gemma4 skips sampling traces
         (``_tt_disable_sampling_trace``), so inject the padded feedback buffer for
         eager sample. Sync only after a real eager writeback — unconditional
@@ -1535,6 +1537,8 @@ class ChunkedPrefillPageTableGuardMixin:
         Opt into host-roundtrip commit with ``GEMMA4_HOST_COMMIT_FEEDBACK=1``
         for async force-argmax shape mismatches (``[1,1,B]`` ↛ ``[1,1,1,32]``).
         """
+        if reload_inputs is None:
+            reload_inputs = getattr(self, "_decode_reload_inputs", True)
         restores = []
         wrote_feedback = False
         host_commit = os.environ.get("GEMMA4_HOST_COMMIT_FEEDBACK", "0").strip().lower() in (
@@ -1572,7 +1576,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 sampling_module.sample = _make_sample(orig_sample, feedback)
                 restores.append((sampling_module, orig_sample))
 
-            out = super().sample_decode_on_device(
+            out = super()._sample_decode(
                 tt_logits,
                 sampling_params,
                 start_pos=start_pos,
@@ -1584,6 +1588,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 reset_sampling_state=reset_sampling_state,
                 reload_inputs=reload_inputs,
                 skip_precompile=skip_precompile,
+                grammar_bitmask=grammar_bitmask,
             )
             if host_commit:
                 try:
@@ -1634,11 +1639,22 @@ class ChunkedPrefillPageTableGuardMixin:
         reload_page_table: bool,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+        grammar_bitmask: torch.Tensor | None = None,
         skip_trace_precompile: bool = False,
         prepare_trace: bool = False,
         **kwargs,
     ):
         """Gemma4 decode with batch-keyed traces and explicit reload commands."""
+        if self._deferred_decode_sampling_failed:
+            raise RuntimeError(
+                "a prior deferred device-sampling step failed after decode "
+                "submission; restart the model runner before decoding again"
+            )
+        if self._pending_deferred_decode_sampling is not None:
+            raise RuntimeError(
+                "decode_forward cannot submit another decode before the "
+                "previous deferred device-sampling payload is consumed"
+            )
         if "reset_batch" in kwargs:
             raise TypeError("reset_batch is not supported by decode input update contract v1")
         # Sequential prefill narrows per-layer tables to one row; decode needs
@@ -1686,7 +1702,20 @@ class ChunkedPrefillPageTableGuardMixin:
             )
 
         if defer_device_sampling and on_device_sampling:
-            return tt_decode_output
+            deferred = DeferredDecodeSampling(
+                tt_logits=tt_decode_output,
+                start_pos=start_pos,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
+                enable_trace=enable_trace,
+                skip_precompile=skip_trace_precompile,
+                reload_inputs=reload_inputs,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+            )
+            self._pending_deferred_decode_sampling = deferred
+            return deferred
         if sampling_params is not None:
             tt_decode_output = self.sample_decode_on_device(
                 tt_decode_output,
@@ -1700,6 +1729,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 reset_sampling_state=reset_sampling_state,
                 reload_inputs=reload_inputs,
                 skip_precompile=skip_trace_precompile,
+                grammar_bitmask=grammar_bitmask,
             )
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
