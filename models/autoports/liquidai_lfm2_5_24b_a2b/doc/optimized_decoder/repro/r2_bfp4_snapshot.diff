@@ -1,0 +1,144 @@
+# r2_bfp4 changes in the private snapshot copy models/autoports/lfm2_s3snap_r2bfp4 (hunks of other agents' concurrent snapshot edits removed)
+--- a/tt/optimized_decoder.py	2026-10-16 19:04:57.579100982 +1030
++++ b/tt/optimized_decoder.py	2026-10-16 19:04:31.085917659 +1030
+@@ -77,6 +77,12 @@
+     ds_conv_in: tuple = None
+     ds_conv_out: tuple = None
+     ds_dense_w2: tuple = None
++    # r2_bfp4 prototypes: DRAM-sharded dense w1/w3 (cores, in0_block_w, readers); N zero-padded to a
++    # multiple of banks*readers tiles, kept padded through silu*mul (inert zeros) and consumed by a
++    # DRAM-sharded w2 whose K is zero-padded to match (requires ds_dense_w2)
++    ds_dense_w13: tuple = None
++    # explicit 1D in0-mcast decode config for interleaved w1/w3: (per_core_N, in0_block_w, out_subblock_w)
++    dense_w13_decode_cfg: tuple = None
+     # decode RMSNorms width-sharded in L1 (operator_norm output already in the next DRAM-sharded
+     # projection's input layout; ffn_norm sharded on this many cores then back to interleaved)
+     sharded_decode_norm: bool = False
+@@ -228,12 +234,21 @@
+     ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` (``in0_block_w``, readers per
+     bank), output back to interleaved.  Prefill: the same weight with a 2D mcast config."""
+
+-    def __init__(self, mesh_device, w, dtype, cfg):
++    def __init__(self, mesh_device, w, dtype, cfg, k_pad=None, keep_n_pad=False):
+         self.mesh_device = mesh_device
+         banks = mesh_device.dram_grid_size().x
+-        k, n = w.shape
+-        assert n % (TILE * banks) == 0, (n, banks)
+-        self.k, self.n = k, n
++        k0, n0 = w.shape
++        readers = cfg[2]
++        unit = TILE * banks * readers  # per-bank tile count must divide by the readers per bank
++        n, k = math.ceil(n0 / unit) * unit, (k_pad or k0)
++        if (k, n) != (k0, n0):  # inert zero padding (zero weight rows / columns)
++            import torch
++
++            wp = torch.zeros(k, n, dtype=w.dtype)
++            wp[:k0, :n0] = w
++            w = wp
++        self.k, self.n, self.n_real = k, n, n0
++        self.keep_n_pad = keep_n_pad
+         dram = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+         wmem = ttnn.MemoryConfig(
+             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+@@ -268,13 +283,22 @@
+             ttnn.deallocate(xs)
+         oi = ttnn.to_memory_config(o, mem)
+         ttnn.deallocate(o)
+-        return oi
++        return self._unpad(oi, mem)
++
++    def _unpad(self, o, mem):
++        if self.keep_n_pad or self.n == self.n_real:
++            return o
++        rows = o.shape[-2]
++        s = ttnn.slice(o, (0, 0, 0, 0), (1, 1, rows, self.n_real), memory_config=mem)
++        ttnn.deallocate(o)
++        return s
+
+     def prefill(self, x, ckc, mem=DRAM):
+         m = x.shape[-2]
+         if m not in self._prefill_cfgs:
+             self._prefill_cfgs[m] = prefill_2d_config(self.mesh_device, m, self.k, self.n)
+-        return ttnn.linear(x, self.weight, program_config=self._prefill_cfgs[m], compute_kernel_config=ckc, memory_config=mem)
++        o = ttnn.linear(x, self.weight, program_config=self._prefill_cfgs[m], compute_kernel_config=ckc, memory_config=mem)
++        return self._unpad(o, mem)
+
+     def __call__(self, x, ckc, mem):
+         return self.decode(x, ckc, mem) if x.shape[-2] <= TILE else self.prefill(x, ckc, mem)
+@@ -394,13 +418,53 @@
+             self.w2 = _as_tt(sd["feed_forward.w2.weight"].T, mesh_device, dtype=DTYPES[policy.dense_w2])
+         self.ckc = _ckc(mesh_device, policy.dense_fidelity)
+         self.policy, self.mesh_device, self._w13_cfgs = policy, mesh_device, {}
+-        self.ds_w2 = None
++        self.ds_w2 = self.ds_w1 = self.ds_w3 = None
++        k_pad = None
++        if policy.ds_dense_w13:
++            assert policy.ds_dense_w2, "ds_dense_w13 pads I; the padded w2 is the DRAM-sharded one"
++            ttnn.deallocate(self.w1)
++            ttnn.deallocate(self.w3)
++            dt = DTYPES[policy.dense_w13]
++            self.ds_w1 = DramShardedLinear(mesh_device, sd["feed_forward.w1.weight"].T, dt, policy.ds_dense_w13, keep_n_pad=True)
++            self.ds_w3 = DramShardedLinear(mesh_device, sd["feed_forward.w3.weight"].T, dt, policy.ds_dense_w13, keep_n_pad=True)
++            k_pad = self.ds_w1.n
+         if policy.ds_dense_w2:
+             ttnn.deallocate(self.w2)
+-            self.ds_w2 = DramShardedLinear(mesh_device, sd["feed_forward.w2.weight"].T, DTYPES[policy.dense_w2], policy.ds_dense_w2)
++            self.ds_w2 = DramShardedLinear(
++                mesh_device, sd["feed_forward.w2.weight"].T, DTYPES[policy.dense_w2], policy.ds_dense_w2, k_pad=k_pad
++            )
++        self.w13_decode_cfg = None
++        if policy.dense_w13_decode_cfg:
++            pcn, bw, sw = policy.dense_w13_decode_cfg
++            grid = mesh_device.compute_with_storage_grid_size()
++            self.w13_decode_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++                compute_with_storage_grid_size=(grid.x, grid.y),
++                in0_block_w=bw,
++                out_subblock_h=1,
++                out_subblock_w=sw,
++                per_core_M=1,
++                per_core_N=pcn,
++                fuse_batch=True,
++                fused_activation=None,
++                mcast_in0=True,
++            )
++
++    def _swiglu_out(self, g, u, residual):
++        h = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=DRAM)
++        ttnn.deallocate(g)
++        ttnn.deallocate(u)
++        out = self._down_project(h, residual)
++        ttnn.deallocate(h)
++        return out
+
+     def forward(self, x, residual=None):
+         T = x.shape[-2]
++        if self.ds_w1 is not None:
++            mem = L1 if T <= TILE else DRAM
++            return self._swiglu_out(self.ds_w1(x, self.ckc, mem), self.ds_w3(x, self.ckc, mem), residual)
++        if T <= TILE and self.w13_decode_cfg is not None:
++            kw = dict(program_config=self.w13_decode_cfg, compute_kernel_config=self.ckc, memory_config=DRAM)
++            return self._swiglu_out(ttnn.linear(x, self.w1, **kw), ttnn.linear(x, self.w3, **kw), residual)
+         if T <= TILE or not self.policy.dense_prefill_2d or "dense_minimal_swiglu" in self.f or "dense_merged_w13" in self.f:
+             return super().forward(x, residual)
+         cfg = self._w13_cfgs.get(T)
+@@ -879,6 +944,9 @@
+         if self.ffn_norm_sh is None:
+             return self._norm(h, self.ffn_norm, DRAM)
+         hs = self.ffn_norm_sh(h, self.ffn_norm)
++        ds_w1 = getattr(self.ffn, "ds_w1", None)
++        if ds_w1 is not None and ds_w1.in_mem == hs.memory_config():
++            return hs  # already the DRAM-sharded w1/w3 input layout
+         hn = ttnn.to_memory_config(hs, L1)
+         ttnn.deallocate(hs)
+         return hn
+--- a/tests/test_functional_decoder.py	2026-10-16 19:30:30.325465052 +1030
++++ b/tests/test_functional_decoder.py	2026-10-16 19:49:30.581274510 +1030
+@@ -39,7 +39,7 @@
+
+ PCC_BAR = 0.995
+ DELTA_PCC_BAR = 0.99  # PCC of the layer update out - x (see delta_pccs); set from the functional baseline
+-LAYERS = {"conv_dense": 0, "conv_moe": 3, "attn_moe": 2}
++LAYERS = {"conv_dense": 0, "conv_moe": 3, "attn_moe": 2, "l1_convdense": 1, "cm_l7": 7, "cm_l15": 15, "cm_l23": 23, "cm_l31": 31, "cm_l39": 39}  # r2_bfp4: + layer 1 (2nd dense layer), more conv_moe layers
+
+
+ def _use_real():

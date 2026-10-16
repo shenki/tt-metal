@@ -1,0 +1,184 @@
+Final default (round 3): dtype / fidelity of every Matmul / SparseMatmul / SDPA row in the measured Tracy windows
+(tt-perf-report CSV 'Math Fidelity' column; mean device us per op; tracy_final_r3/<kind>/<b>/<tag>/).
+
+== tracy_final_r3/attn_moe/b1/final_bucket1 decode
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean     73.9 us  HiFi2 BF16 x BFP8 => BF16
+  SdpaDecodeDeviceOperation                        cores  110  x5   mean     47.8 us  BF16, BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean     38.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 3072           cores    8  x5   mean     20.8 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.3 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.1 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 64 x 256              cores    8  x5   mean      2.7 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 256 x 32              cores    1  x5   mean      1.7 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/attn_moe/b1/final_bucket1 prefill
+  MatmulDeviceOperation 2048 x 2048 x 3072         cores  110  x1   mean    149.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.5 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     54.9 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     16.4 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      7.4 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.7 us  HiFi4 BF16 x BF16 => FP32
+
+== tracy_final_r3/attn_moe/b1/final_nobucket decode
+  SdpaDecodeDeviceOperation                        cores  110  x5   mean    533.0 us  BF16, BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean    117.9 us  HiFi2 BF16 x BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean     75.9 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 3072           cores    8  x5   mean     21.0 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.5 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.4 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 64               cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/attn_moe/b1/final_nobucket prefill
+  MatmulDeviceOperation 2048 x 2048 x 3072         cores  110  x1   mean    150.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.9 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     55.4 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     15.8 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      6.8 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.7 us  HiFi4 BF16 x BF16 => FP32
+
+== tracy_final_r3/attn_moe/b32/final decode
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean    729.1 us  HiFi2 BF16 x BFP8 => BF16
+  SdpaDecodeDeviceOperation                        cores  110  x5   mean    551.5 us  BF16, BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean    385.9 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 3072           cores    8  x5   mean     21.0 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.5 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 64               cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/attn_moe/b32/final prefill
+  MatmulDeviceOperation 2048 x 2048 x 3072         cores  110  x1   mean    150.3 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.7 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     54.7 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     16.1 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      7.2 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.7 us  HiFi4 BF16 x BF16 => FP32
+
+== tracy_final_r3/attn_moe/b4/final_bucket4 decode
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean    286.0 us  HiFi2 BF16 x BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean    155.5 us  HiFi2 BF16 x BFP8 => BF16
+  SdpaDecodeDeviceOperation                        cores  110  x5   mean     74.6 us  BF16, BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 3072           cores    8  x5   mean     20.9 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.4 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.1 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 64 x 256              cores    8  x5   mean      2.7 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 256 x 32              cores    1  x5   mean      1.6 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/attn_moe/b4/final_bucket4 prefill
+  MatmulDeviceOperation 2048 x 2048 x 3072         cores  110  x1   mean    150.2 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    105.2 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     54.1 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     16.5 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      6.8 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.7 us  HiFi4 BF16 x BF16 => FP32
+
+== tracy_final_r3/conv_dense/b1/final_nobucket decode
+  MatmulDeviceOperation 32 x 2048 x 12288          cores    8  x10  mean     66.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 12288 x 2048          cores    8  x5   mean     59.1 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 6144           cores    8  x5   mean     33.5 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.4 us  HiFi2 BF16 x BFP8 => BF16
+
+== tracy_final_r3/conv_dense/b1/final_nobucket prefill
+  MatmulDeviceOperation 2048 x 2048 x 11776        cores  110  x2   mean    651.3 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 11776 x 2048        cores  110  x1   mean    444.9 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 6144         cores  110  x1   mean    311.8 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.0 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 32 x 2048             cores   64  x4   mean      2.9 us  HiFi2 BF16 x BF16 => BF16
+
+== tracy_final_r3/conv_dense/b32/final decode
+  MatmulDeviceOperation 32 x 2048 x 12288          cores    8  x10  mean     66.5 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 12288 x 2048          cores    8  x5   mean     59.2 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 6144           cores    8  x5   mean     33.5 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.6 us  HiFi2 BF16 x BFP8 => BF16
+
+== tracy_final_r3/conv_dense/b32/final prefill
+  MatmulDeviceOperation 2048 x 2048 x 11776        cores  110  x2   mean    652.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 11776 x 2048        cores  110  x1   mean    444.5 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 6144         cores  110  x1   mean    310.9 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.8 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 32 x 2048             cores   64  x4   mean      2.9 us  HiFi2 BF16 x BF16 => BF16
+
+== tracy_final_r3/conv_moe/b1/final_bucket1 decode
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean     73.5 us  HiFi2 BF16 x BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean     38.8 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 6144           cores    8  x5   mean     33.3 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.7 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.5 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.1 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 64 x 256              cores    8  x5   mean      2.7 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 256 x 32              cores    1  x5   mean      1.7 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/conv_moe/b1/final_bucket1 prefill
+  MatmulDeviceOperation 2048 x 2048 x 6144         cores  110  x1   mean    311.8 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     54.6 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     16.3 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 2048             cores   64  x4   mean      2.9 us  HiFi2 BF16 x BF16 => BF16
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      6.8 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.7 us  HiFi4 BF16 x BF16 => FP32
+
+== tracy_final_r3/conv_moe/b1/final_nobucket decode
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean    114.5 us  HiFi2 BF16 x BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean     69.8 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 6144           cores    8  x5   mean     33.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.5 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 64               cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/conv_moe/b1/final_nobucket prefill
+  MatmulDeviceOperation 2048 x 2048 x 6144         cores  110  x1   mean    310.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.1 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     54.8 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     16.1 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 2048             cores   64  x4   mean      2.9 us  HiFi2 BF16 x BF16 => BF16
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      6.9 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.7 us  HiFi4 BF16 x BF16 => FP32
+
+== tracy_final_r3/conv_moe/b32/final decode
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean    817.7 us  HiFi2 BF16 x BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean    436.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 6144           cores    8  x5   mean     33.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.6 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.4 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 64               cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.0 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/conv_moe/b32/final prefill
+  MatmulDeviceOperation 2048 x 2048 x 6144         cores  110  x1   mean    311.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    105.2 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     54.3 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     15.9 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 2048             cores   64  x4   mean      2.9 us  HiFi2 BF16 x BF16 => BF16
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      6.8 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.8 us  HiFi4 BF16 x BF16 => FP32
+
+== tracy_final_r3/conv_moe/b4/final_bucket4 decode
+  SparseMatmulDeviceOperation active=?/64 x 32 x 2 cores   48  x5   mean    286.8 us  HiFi2 BF16 x BFP8 => BF16
+  SparseMatmulDeviceOperation active=?/64 x 32 x 1 cores   32  x5   mean    158.7 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 6144           cores    8  x5   mean     33.4 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 2048           cores    8  x5   mean     14.5 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 32 x 2048 x 256            cores    8  x5   mean     10.4 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 256 x 64              cores    2  x5   mean      3.1 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 256              cores    8  x5   mean      2.8 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 64 x 256              cores    8  x5   mean      2.7 us  HiFi4 BF16 x BF16 => BF16
+  MatmulDeviceOperation 32 x 256 x 32              cores    1  x5   mean      1.7 us  HiFi4 BF16 x BF16 => BF16
+
+== tracy_final_r3/conv_moe/b4/final_bucket4 prefill
+  MatmulDeviceOperation 2048 x 2048 x 6144         cores  110  x1   mean    311.9 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 2048         cores  110  x1   mean    104.1 us  HiFi2 BF16 x BFP8 => BF16
+  MatmulDeviceOperation 2048 x 2048 x 64           cores   64  x1   mean     54.6 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation b={256} x 32 x 32 x 64     cores   64  x1   mean     15.8 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 32 x 2048             cores   64  x4   mean      2.9 us  HiFi2 BF16 x BF16 => BF16
+  MatmulDeviceOperation 256 x 256 x 64             cores   16  x1   mean      6.7 us  HiFi4 BF16 x BF16 => FP32
+  MatmulDeviceOperation 32 x 64 x 64               cores    2  x1   mean      1.7 us  HiFi4 BF16 x BF16 => FP32

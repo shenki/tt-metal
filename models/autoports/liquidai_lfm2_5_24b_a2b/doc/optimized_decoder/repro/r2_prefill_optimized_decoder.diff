@@ -1,0 +1,296 @@
+--- a/models/autoports/lfm2_s3snap/tt/optimized_decoder.py
++++ b/models/autoports/lfm2_s3snap/tt/optimized_decoder.py
+@@ -95,6 +95,13 @@
+     moe_dispatch_min_rows: int = 0
+     moe_dispatch_max_rows: int = 2048  # static constants are sized for chunks up to this many rows
+     ffn_norm_cores: int = 8
++    # ---- prefill round 2 (review P2 #4 / P5) ----
++    sdpa_prefill_k_chunk: int = 0  # cap of the chunked-prefill SDPA k chunk (power of 2 dividing start); 0 = q chunk
++    sdpa_prefill_fidelity: str = "hifi4"  # chunked-prefill SDPA only (qk-norm / rope keep HiFi4)
++    moe_scan_multicore: bool = False  # rank-scan batched [32x32]@[32xE] matmuls with a batch-parallel program config
++    moe_scatter_rows: int = 1  # dispatch source-map scatter split over this many rows (cores), then summed
++    moe_out_direct_untilize: bool = False  # BFP8 FFN output -> BF16 row-major in one untilize (no typecast)
++    prefill_mm_v2: bool = False  # prefill_2d_config: dtype-aware L1 budget, full output block first, subblock w 3
+     # decode MoE for a static small active-user bucket (decode_bucket <= this; 0 = off): the
+     # bucket*K selected experts are computed compactly with sparse_matmul indexed (gather) mode
+     # instead of the 64-expert-wide path; requires at most decode_bucket active slots
+@@ -131,7 +138,9 @@
+     moe_gate_up_prefill_cfg=(8, 8, 8, 1),
+     moe_down_prefill_cfg=(8, 6, 8, 2),
+     moe_dispatch_min_rows=96,
+-    sdpa_prefill_chunk=128,
++    sdpa_prefill_chunk=64,
++    sdpa_prefill_k_chunk=512,
++    sdpa_prefill_fidelity="hifi2",
+     dense_prefill_2d=True,
+     router_bf16=True,
+     router_ksplit=8,
+@@ -139,6 +148,10 @@
+     dispatch_fidelity="lofi",
+     dispatch_hybrid_threshold=128,
+     conv_prefill_windowed_tail=True,
++    moe_scan_multicore=True,
++    moe_scatter_rows=32,
++    moe_out_direct_untilize=True,
++    prefill_mm_v2=True,
+ )
+
+
+@@ -178,13 +191,15 @@
+         return y
+
+
+-def prefill_2d_config(mesh_device, m, k, n):
++def prefill_2d_config(mesh_device, m, k, n, v2=False, w_tile_bytes=2048):
+     """2D-mcast matmul config for large-M prefill over the full compute grid (works with
+     interleaved and DRAM-width-sharded weights)."""
+     grid = mesh_device.compute_with_storage_grid_size()
+     mt, kt, nt = m // TILE, k // TILE, n // TILE
+     gy, gx = min(grid.y, mt), min(grid.x, nt)
+     per_core_m, per_core_n = math.ceil(mt / gy), math.ceil(nt / gx)
++    if v2:
++        return _prefill_2d_config_v2(gx, gy, kt, per_core_m, per_core_n, w_tile_bytes)
+     # circular buffers must fit L1: double-buffered bf16 in0 / (<= bf16) in1 blocks, and the bf16
+     # output block with its fp32 partials; shrink the output block (divisors of the per-core tile
+     # counts) first, then in0_block_w
+@@ -221,6 +236,46 @@
+     )
+
+
++def _prefill_2d_config_v2(gx, gy, kt, per_core_m, per_core_n, w_tile_bytes):
++    """Largest output block first (fewer partial-output spills), then the largest in0_block_w that
++    fits; in1 blocks sized by the weight dtype; subblock widths up to 3/4 (<= 4 tiles with fp32 acc).
++    Measured (repro/r2_prefill_ops_bench.py mm, 2048 rows): qkv 230 -> 166 us, conv_in 553 -> 330 us."""
++    budget = 1_300_000
++    divs = lambda v: [d for d in range(v, 0, -1) if v % d == 0]
++    legal_bw = [b for b in (8, 4, 2, 1) if kt % b == 0]
++    blocks = sorted(((h, w) for h in divs(per_core_m) for w in divs(per_core_n)), key=lambda hw: -hw[0] * hw[1])
++    choice = None
++    for ob_h, ob_w in blocks:
++        for bw in legal_bw:
++            used = 2 * per_core_m * bw * 2048 + 2 * bw * per_core_n * w_tile_bytes + ob_h * ob_w * (2048 + 4096)
++            if used <= budget:
++                choice = (bw, ob_h, ob_w)
++                break
++        if choice:
++            break
++    in0_bw, out_block_h, out_block_w = choice or (legal_bw[-1], 1, 1)
++    sub_h, sub_w = max(
++        ((h, w) for h in (1, 2, 4) for w in (1, 2, 3, 4) if out_block_h % h == 0 and out_block_w % w == 0 and h * w <= 4),
++        key=lambda hw: (hw[0] * hw[1], hw[1]),
++    )
++    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
++        compute_with_storage_grid_size=(gx, gy),
++        in0_block_w=in0_bw,
++        out_subblock_h=sub_h,
++        out_subblock_w=sub_w,
++        out_block_h=out_block_h,
++        out_block_w=out_block_w,
++        per_core_M=per_core_m,
++        per_core_N=per_core_n,
++        transpose_mcast=False,
++        fused_activation=None,
++        fuse_batch=False,
++    )
++
++
++_TILE_BYTES = {"bf16": 2048, "bfp8": 1088, "bfp4": 576}
++
++
+ class DramShardedLinear:
+     """``x @ W`` with ``W`` width-sharded over the DRAM banks.
+
+@@ -228,8 +283,10 @@
+     ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` (``in0_block_w``, readers per
+     bank), output back to interleaved.  Prefill: the same weight with a 2D mcast config."""
+
+-    def __init__(self, mesh_device, w, dtype, cfg):
++    def __init__(self, mesh_device, w, dtype, cfg, prefill_v2=False):
+         self.mesh_device = mesh_device
++        self.prefill_v2 = prefill_v2
++        self.w_tile_bytes = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}[dtype]
+         banks = mesh_device.dram_grid_size().x
+         k, n = w.shape
+         assert n % (TILE * banks) == 0, (n, banks)
+@@ -273,7 +330,7 @@
+     def prefill(self, x, ckc, mem=DRAM):
+         m = x.shape[-2]
+         if m not in self._prefill_cfgs:
+-            self._prefill_cfgs[m] = prefill_2d_config(self.mesh_device, m, self.k, self.n)
++            self._prefill_cfgs[m] = prefill_2d_config(self.mesh_device, m, self.k, self.n, self.prefill_v2, self.w_tile_bytes)
+         return ttnn.linear(x, self.weight, program_config=self._prefill_cfgs[m], compute_kernel_config=ckc, memory_config=mem)
+
+     def __call__(self, x, ckc, mem):
+@@ -298,6 +355,7 @@
+             self.wo = _as_tt(sd["self_attn.out_proj.weight"].T, mesh_device, dtype=DTYPES[policy.attn_out])
+         self.ckc = _ckc(mesh_device, policy.attn_fidelity)
+         self.ckc_sdpa_decode = _ckc(mesh_device, policy.sdpa_decode_fidelity)
++        self.ckc_sdpa_prefill = _ckc(mesh_device, policy.sdpa_prefill_fidelity)
+         self.ds_qkv = self.ds_wo = None
+         if policy.ds_wqkv:
+             import torch
+@@ -306,13 +364,65 @@
+                 [sd["self_attn.q_proj.weight"], sd["self_attn.k_proj.weight"], sd["self_attn.v_proj.weight"]], dim=0
+             ).T
+             ttnn.deallocate(self.wqkv)
+-            self.ds_qkv = DramShardedLinear(mesh_device, wqkv, DTYPES[policy.attn_qkv], policy.ds_wqkv)
++            self.ds_qkv = DramShardedLinear(mesh_device, wqkv, DTYPES[policy.attn_qkv], policy.ds_wqkv, policy.prefill_mm_v2)
+         if policy.ds_wo:
+             ttnn.deallocate(self.wo)
+             self.ds_wo = DramShardedLinear(
+-                mesh_device, sd["self_attn.out_proj.weight"].T, DTYPES[policy.attn_out], policy.ds_wo
++                mesh_device, sd["self_attn.out_proj.weight"].T, DTYPES[policy.attn_out], policy.ds_wo, policy.prefill_mm_v2
+             )
+
++    def prefill_forward(self, x, *, rope, chunk_start, page_table, chunk_page_table, chunk_start_tensor, residual=None):
++        p = self.policy
++        if not p.sdpa_prefill_k_chunk and p.sdpa_prefill_fidelity == "hifi4":
++            return super().prefill_forward(
++                x, rope=rope, chunk_start=chunk_start, page_table=page_table, chunk_page_table=chunk_page_table,
++                chunk_start_tensor=chunk_start_tensor, residual=residual,
++            )
++        S = x.shape[-2]
++        assert S % TILE == 0 and chunk_start % self.k_cache.shape[2] == 0, (S, chunk_start)
++        qkv = self._qkv_linear(x, DRAM)
++        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
++            qkv, num_heads=self.NH, num_kv_heads=self.NKV, transpose_k_heads=False, memory_config=DRAM
++        )
++        ttnn.deallocate(qkv)
++        q = self._qk_norm_f(q, "q", DRAM)
++        k = self._qk_norm_f(k, "k", DRAM)
++        cos, sin = rope.prefill_cos_sin(chunk_start, S)
++        q = self._rope(rope, q, cos, sin, False)
++        k = self._rope(rope, k, cos, sin, False)
++        if k.dtype != self.k_cache.dtype:
++            k = ttnn.typecast(k, self.k_cache.dtype)
++            v = ttnn.typecast(v, self.v_cache.dtype)
++        ttnn.experimental.paged_fill_cache(self.k_cache, k, chunk_page_table, batch_idx=0)
++        ttnn.experimental.paged_fill_cache(self.v_cache, v, chunk_page_table, batch_idx=0)
++        ttnn.deallocate(k)
++        ttnn.deallocate(v)
++        q_chunk = self.prefill_sdpa_chunk(chunk_start, S)
++        # k chunk capped independently of q: few, large k chunks = fewer online-softmax rescales
++        # (k128 costs update PCC 0.9906 at 131k context); power of two dividing chunk_start, no
++        # larger than the attended length (short prompts would otherwise pay for a padded k chunk)
++        k_chunk = p.sdpa_prefill_k_chunk or q_chunk
++        while k_chunk > TILE and (chunk_start % k_chunk or k_chunk > chunk_start + S):
++            k_chunk //= 2
++        cfg = ttnn.SDPAProgramConfig(
++            compute_with_storage_grid_size=self.grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk, exp_approx_mode=False
++        )
++        attn = ttnn.transformer.chunked_scaled_dot_product_attention(
++            q,
++            self.k_cache,
++            self.v_cache,
++            page_table,
++            chunk_start_idx_tensor=chunk_start_tensor,
++            scale=self.scale,
++            program_config=cfg,
++            compute_kernel_config=self.ckc_sdpa_prefill,
++        )
++        ttnn.deallocate(q)
++        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=DRAM)
++        out = self._out_project(attn, residual)
++        ttnn.deallocate(attn)
++        return out
++
+     def _qkv_linear(self, x, mem):
+         if self.ds_qkv is None:
+             return super()._qkv_linear(x, mem)
+@@ -358,11 +468,11 @@
+         self.ds_in = self.ds_out = None
+         if policy.ds_conv_in:
+             ttnn.deallocate(self.in_proj)
+-            self.ds_in = DramShardedLinear(mesh_device, sd["conv.in_proj.weight"].T, DTYPES[policy.conv_in], policy.ds_conv_in)
++            self.ds_in = DramShardedLinear(mesh_device, sd["conv.in_proj.weight"].T, DTYPES[policy.conv_in], policy.ds_conv_in, policy.prefill_mm_v2)
+         if policy.ds_conv_out:
+             ttnn.deallocate(self.out_proj)
+             self.ds_out = DramShardedLinear(
+-                mesh_device, sd["conv.out_proj.weight"].T, DTYPES[policy.conv_out], policy.ds_conv_out
++                mesh_device, sd["conv.out_proj.weight"].T, DTYPES[policy.conv_out], policy.ds_conv_out, policy.prefill_mm_v2
+             )
+
+     def _gated_input(self, x, mem):
+@@ -397,7 +507,7 @@
+         self.ds_w2 = None
+         if policy.ds_dense_w2:
+             ttnn.deallocate(self.w2)
+-            self.ds_w2 = DramShardedLinear(mesh_device, sd["feed_forward.w2.weight"].T, DTYPES[policy.dense_w2], policy.ds_dense_w2)
++            self.ds_w2 = DramShardedLinear(mesh_device, sd["feed_forward.w2.weight"].T, DTYPES[policy.dense_w2], policy.ds_dense_w2, policy.prefill_mm_v2)
+
+     def forward(self, x, residual=None):
+         T = x.shape[-2]
+@@ -405,7 +515,10 @@
+             return super().forward(x, residual)
+         cfg = self._w13_cfgs.get(T)
+         if cfg is None:
+-            cfg = self._w13_cfgs[T] = prefill_2d_config(self.mesh_device, T, x.shape[-1], self.I)
++            p = self.policy
++            cfg = self._w13_cfgs[T] = prefill_2d_config(
++                self.mesh_device, T, x.shape[-1], self.I, p.prefill_mm_v2, _TILE_BYTES[p.dense_w13]
++            )
+         g = ttnn.linear(x, self.w1, program_config=cfg, compute_kernel_config=self.ckc, memory_config=DRAM)
+         u = ttnn.linear(x, self.w3, program_config=cfg, compute_kernel_config=self.ckc, memory_config=DRAM)
+         h = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=DRAM)
+@@ -509,6 +622,9 @@
+         self.d_src_tok = _as_tt((torch.arange(pmax).div(K, rounding_mode="floor") + 1).float().reshape(1, pmax), md, dtype=ttnn.float32, layout=rm)
+         self.d_src_zero = _as_tt(torch.zeros(1, self._max_buf(self.policy.moe_dispatch_max_rows)), md, dtype=ttnn.float32, layout=rm)
+         self.d_zero_row = _as_tt(torch.zeros(1, 1, 1, H), md, layout=rm)
++        R = self.policy.moe_scatter_rows
++        if R > 1:
++            self.d_src_zero_rows = _as_tt(torch.zeros(R, self._max_buf(self.policy.moe_dispatch_max_rows)), md, dtype=ttnn.float32, layout=rm)
+         # exact prefix sums as matmuls with 0/1 triangular constants (fp32 accumulation, HiFi4):
+         # within 32-pair blocks (inclusive), across blocks (exclusive), across experts (exclusive)
+         gmax = pmax // TILE
+@@ -552,7 +668,15 @@
+         E, G = self.E, P // TILE
+         oh = ttnn.typecast(ttnn.reshape(onehot, (1, G, TILE, E)), ttnn.bfloat16)
+         tri = ttnn.slice(self.d_tri32, (0, 0, 0, 0), (1, G, TILE, TILE))
+-        local = ttnn.matmul(tri, oh, compute_kernel_config=self.d_scan_ckc, dtype=ttnn.float32)  # [1, G, 32, E]
++        scan_cfg = None
++        if self.policy.moe_scan_multicore:
++            # the default config runs the G batched 1x1x2-tile matmuls on 2 cores (262 us at G=256);
++            # batch-parallel over 8x8 cores: 22 us (repro/r2_prefill_ops_bench.py scan)
++            scan_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
++                compute_with_storage_grid_size=(8, 8), in0_block_w=1, out_subblock_h=1, out_subblock_w=E // TILE,
++                per_core_M=1, per_core_N=E // TILE,
++            )
++        local = ttnn.matmul(tri, oh, compute_kernel_config=self.d_scan_ckc, dtype=ttnn.float32, program_config=scan_cfg)  # [1, G, 32, E]
+         ttnn.deallocate(oh)
+         tot = ttnn.typecast(ttnn.reshape(ttnn.slice(local, (0, 0, TILE - 1, 0), (1, G, TILE, E)), (G, E)), ttnn.bfloat16)  # <= 32
+         strict = ttnn.slice(self.d_blocks_strict, (0, 0), (G, G))
+@@ -591,7 +715,21 @@
+         ttnn.deallocate(dest)
+         src_tok = ttnn.slice(self.d_src_tok, (0, 0), (1, P))
+         src_init = ttnn.slice(self.d_src_zero, (0, 0), (1, maxbuf))
+-        src = ttnn.typecast(ttnn.scatter(src_init, -1, dest_u, src_tok), ttnn.uint32)
++        R = self.policy.moe_scatter_rows
++        if R > 1:
++            # scatter parallelizes over rows only (1 row = 1 core: 404 us): the pairs are split over R
++            # rows, each scattered into its own zero row; every destination is written exactly once,
++            # so the fp32 row sum (values <= T + 1, exact) is the placement
++            init = ttnn.slice(self.d_src_zero_rows, (0, 0), (R, maxbuf))
++            part = ttnn.scatter(init, -1, ttnn.reshape(dest_u, (R, P // R)), ttnn.reshape(src_tok, (R, P // R)))
++            part_t = ttnn.to_layout(part, ttnn.TILE_LAYOUT)
++            ttnn.deallocate(part)
++            red = ttnn.sum(part_t, dim=0, keepdim=True)
++            ttnn.deallocate(part_t)
++            src = ttnn.typecast(rm(red), ttnn.uint32)
++            ttnn.deallocate(red)
++        else:
++            src = ttnn.typecast(ttnn.scatter(src_init, -1, dest_u, src_tok), ttnn.uint32)
+         table = ttnn.reshape(ttnn.concat([self.d_zero_row, rm(x)], dim=2), (T + 1, H))
+         buf = ttnn.reshape(ttnn.embedding(src, table, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16), (maxbuf, H))
+         ttnn.deallocate(src)
+@@ -608,7 +746,10 @@
+                 buf, region_u, counts_u, self.d_gidx, self.d_gates, self.d_ups, self.d_downs, T, compute_kernel_config=self.d_ckc
+             )  # bfp8 TILE [maxbuf, H]
+         ttnn.deallocate(buf)
+-        out_rm = ttnn.to_layout(ttnn.typecast(out, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
++        if self.policy.moe_out_direct_untilize:
++            out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)  # BFP8 tile -> BF16 RM in one untilize (bit-identical)
++        else:
++            out_rm = ttnn.to_layout(ttnn.typecast(out, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+         ttnn.deallocate(out)
+         comb = ttnn.reshape(ttnn.embedding(dest_u, out_rm, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16), (1, 1, T, K, H))
+         ttnn.deallocate(out_rm)

@@ -1,0 +1,3 @@
+default policy={} batch=32 bucket=0
+generated/profiler/reports/2026_10_16_22_48_45/ops_perf_results_2026_10_16_22_48_45.csv mtime=2026-10-16 22:48:46.474035182 +1030
+a97b93473832e289 (sha256 of lfm2_r3_bfp4 tt/*.py + bench files)

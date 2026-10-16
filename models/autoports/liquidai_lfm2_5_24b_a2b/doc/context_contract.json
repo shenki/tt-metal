@@ -61,5 +61,52 @@
     "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/fused_decoder/logs/pytest_fused_real_weights_all.log",
     "capacity_change": null,
     "note": "fusions change no dtype or KV layout; bf16 weights and KV as in the functional decoder"
+  },
+  "optimized_decoder": {
+    "largest_prefill_tested": 131069,
+    "largest_decode_position_tested": 131071,
+    "test": "models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_optimized_decoder.py::test_optimized_full_context",
+    "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/optimized_decoder/logs/r3_final_full_context.log",
+    "kv_cache_dtype": "bfp8",
+    "capability_reduction": null,
+    "persistent_allocation_changes": [
+      "KV cache BFP8 (was BF16): KV bytes per token per attention layer (K+V, 8 heads x 64) 1088 incl. block exponents (was 2048 in BF16)",
+      "expert weights held twice in BFP8: stacked [1,E,K,N] for decode sparse_matmul and per-expert (H,I)/(I,H) for prefill token dispatch",
+      "decode/prefill weights otherwise BFP8; DRAM-sharded projection weights replace (not add to) the interleaved copies",
+      "round 2: dense layers (0, 1) hold decode-only DRAM-sharded w1/w3 (N zero-padded 11776 -> 12288) and a K-padded decode w2 next to the prefill w1/w3/w2: ~77 MB BFP8 extra per dense layer (~0.15 GB for the model)",
+      "round 2: router as a DRAM-sharded [2048, 256] bf16 matmul (N zero-padded from 64): +0.75 MB per MoE layer; router K-split copy removed",
+      "round 2: compact-MoE constants (buckets 1/2/4) and SDPA bucket slices are a few KB; no KV-cache change",
+      "round 3: routing index constants (moe_route_v3) shared per device in DRAM (a few KB; L1 placement OOMs the hybrid prefill expert op); attention pad-free zero buffer copied per call from one shared DRAM zeros tensor",
+      "round 3: no weight or KV-cache size change (BFP4/LoFi candidates deferred to the datatype sweep)"
+    ],
+    "capacity_estimate_4x_p150b_GiB": {
+      "kv_32users_full_context_total": 42.5,
+      "kv_per_chip_kv_heads_sharded_4": 10.6,
+      "expert_weights_two_copies_total": 45.4,
+      "expert_weights_two_copies_per_chip_ep4": 11.4,
+      "other_weights_bfp8_upper_bound_per_chip_if_replicated": 1.1,
+      "per_chip_total_estimate": 23.0,
+      "per_chip_dram": 32.0,
+      "note": "to be re-verified with real allocations in the multichip/full-model stages"
+    },
+    "bucketed_decode": {
+      "active_slots_buckets_tested": [
+        1,
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "full_context_bucket1_test": "tests/test_optimized_decoder.py::test_optimized_bucketed_full_context (131069-token prompt, decode at 131069..131071, bucket 1)",
+      "contract": "active users occupy slots 0..b-1 for bucket b; one decode trace per bucket in serving"
+    },
+    "full_context_prefill_update_pcc_attn_moe": {
+      "round1": 0.990573,
+      "round2": 0.997574,
+      "cause": "prefill SDPA k_chunk 128 (now q64/k512)",
+      "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/optimized_decoder/logs/r2_fullctx_cand_hifi2.log"
+    },
+    "multi_bucket_traces_test": "tests/test_optimized_decoder.py::test_optimized_multi_bucket_traces"
   }
 }

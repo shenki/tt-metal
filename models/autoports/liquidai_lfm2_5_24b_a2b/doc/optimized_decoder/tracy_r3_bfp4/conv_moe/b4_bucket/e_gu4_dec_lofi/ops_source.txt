@@ -1,0 +1,3 @@
+e_gu4_dec_lofi policy={"expert_gate_up_decode": "bfp4", "expert_fidelity": "lofi"} batch=4 bucket=1
+generated/profiler/reports/2026_10_16_23_03_27/ops_perf_results_2026_10_16_23_03_27.csv mtime=2026-10-16 23:03:29.537679523 +1030
+a97b93473832e289 (sha256 of lfm2_r3_bfp4 tt/*.py + bench files)

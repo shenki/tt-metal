@@ -177,6 +177,9 @@ class ConvPrefillInputs:
     tail_sel_{0,1}:  ``[1, 1, B, 32 + S_pad]`` -- row ``slot`` is one-hot at extended row
                      ``32 + valid_len - 2`` (resp. ``- 1``); extended rows 30/31 are the carry.
     keep_mask:       ``[1, 1, B, 1]`` -- 0 at ``slot``, 1 elsewhere.
+    tail_window:     ``None``, or ``(start, end)`` extended rows when built with ``windowed=True``:
+                     ``tail_sel_*`` then index only that tile-aligned window (<= 64 rows) holding
+                     the last two logical rows (consumers that support it slice ``ext`` first).
     """
 
     carry_sel_0: ttnn.Tensor
@@ -184,19 +187,26 @@ class ConvPrefillInputs:
     tail_sel_0: ttnn.Tensor
     tail_sel_1: ttnn.Tensor
     keep_mask: ttnn.Tensor
+    tail_window: tuple = None
 
     @staticmethod
-    def host_tensors(*, slot, valid_len, padded_len, continuation, batch=TILE):
+    def tail_window_for(valid_len, padded_len):
+        start = (TILE + valid_len - 2) // TILE * TILE
+        return start, min(start + 2 * TILE, TILE + padded_len)
+
+    @staticmethod
+    def host_tensors(*, slot, valid_len, padded_len, continuation, batch=TILE, windowed=False):
         assert 0 < valid_len <= padded_len and padded_len % TILE == 0, (valid_len, padded_len)
         carry0 = torch.zeros(1, 1, TILE, batch)
         carry1 = torch.zeros(1, 1, TILE, batch)
         if continuation:
             carry0[0, 0, TILE - 2, slot] = 1.0
             carry1[0, 0, TILE - 1, slot] = 1.0
-        tail0 = torch.zeros(1, 1, batch, TILE + padded_len)
-        tail1 = torch.zeros(1, 1, batch, TILE + padded_len)
-        tail0[0, 0, slot, TILE + valid_len - 2] = 1.0
-        tail1[0, 0, slot, TILE + valid_len - 1] = 1.0
+        start, end = ConvPrefillInputs.tail_window_for(valid_len, padded_len) if windowed else (0, TILE + padded_len)
+        tail0 = torch.zeros(1, 1, batch, end - start)
+        tail1 = torch.zeros(1, 1, batch, end - start)
+        tail0[0, 0, slot, TILE + valid_len - 2 - start] = 1.0
+        tail1[0, 0, slot, TILE + valid_len - 1 - start] = 1.0
         keep = torch.ones(1, 1, batch, 1)
         keep[0, 0, slot, 0] = 0.0
         return carry0, carry1, tail0, tail1, keep
@@ -204,7 +214,8 @@ class ConvPrefillInputs:
     @classmethod
     def create(cls, mesh_device, **kw):
         tensors = cls.host_tensors(**kw)
-        return cls(*[_as_tt(t, mesh_device) for t in tensors])
+        window = cls.tail_window_for(kw["valid_len"], kw["padded_len"]) if kw.get("windowed") else None
+        return cls(*[_as_tt(t, mesh_device) for t in tensors], tail_window=window)
 
 
 class ShortConv(LightweightModule):

@@ -151,3 +151,5 @@ timestamps and README claims: `clean-pass`, no required work. Carried notes: spa
 fused_activation wrong output (not in default path) -> stage 3 note/upstream issue; token-dispatch
 MoE prefill and dense_minimal_swiglu revisit in stage 3; conv_moe update-PCC margin ~0.001.
 - Commit hooks reformatted stage-2 files (black/isort/whitespace); post-format smoke: 12 fused tests (batch32, slot_reuse, perf_determinism, 65-2048) pass under TT_METAL_TRACE_ALLOC_TRACKING=1.
+
+Stage 2 local commit (not pushed): tt-metal branch `autoport/lfm2_5_24b_a2b` `fee73388`.

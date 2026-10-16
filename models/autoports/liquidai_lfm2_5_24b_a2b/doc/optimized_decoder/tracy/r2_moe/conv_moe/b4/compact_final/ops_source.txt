@@ -1,0 +1,3 @@
+compact_final base=default policy={"moe_compact_max_users": 4, "moe_gate_up_compact_cfg": [8,6,8,1], "moe_down_compact_cfg": [8,6,48,2]} batch=4
+/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/generated/profiler_r2moe/reports/2026_10_16_19_42_00/ops_perf_results_2026_10_16_19_42_00.csv
+fee73388

@@ -1,0 +1,2 @@
+c2_cin_bfp4_lofi policy={"conv_in":"bfp4","conv_fidelity":"lofi","ds_conv_in":[8,8,2]} batch=1
+generated/r2_bfp4_tracy_328500/reports/2026_10_16_19_47_14/ops_perf_results_2026_10_16_19_47_14.csv

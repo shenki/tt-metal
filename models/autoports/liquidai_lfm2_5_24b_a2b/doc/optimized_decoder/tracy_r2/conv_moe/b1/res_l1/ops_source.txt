@@ -1,0 +1,3 @@
+res_l1 base=default policy={"decode_residual_l1":true} batch=1
+generated/profiler/reports/2026_10_16_19_30_31/ops_perf_results_2026_10_16_19_30_31.csv
+fee73388

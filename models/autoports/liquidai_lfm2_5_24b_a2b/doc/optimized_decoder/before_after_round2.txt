@@ -1,0 +1,17 @@
+Tracy device time per pass (tt-perf-report --csv 'Device Time', us).
+baseline = BASELINE_POLICY (== stage-2 fused graph); round 1 = stage-3 default before review (before_after_round1.txt);
+final = DEFAULT_POLICY after round 2 (tracy_final_r2/). decode window: 5 traced replays; prefill: one fresh 2048-token chunk.
+All windows complete (op counts multiple of the pass count). bucket b = active_slots (users in slots 0..b-1).
+
+kind        batch / bucket        prefill 2048: baseline -> round1 -> final        decode: baseline -> round1 -> final
+attn_moe    b1, no bucket         337358.2 -> 7601.3 -> 6632.8 (50.9x)             6924.6 -> 1113.3 -> 1088.0
+attn_moe    b1, bucket 1          (same prefill)                                   6924.6 -> 1113.3 ->  419.3 (16.5x)
+attn_moe    b4, bucket 4                                                           (n/a)  ->  (n/a) ->  823.7
+attn_moe    b32                   337470.9 -> 7596.0 -> 6639.5 (50.8x)             6141.3 -> 2049.5 -> 2033.2 (3.0x)
+conv_moe    b1, no bucket         355499.7 -> 7080.7 -> 6185.0 (57.5x)             6057.0 ->  548.1 ->  510.1
+conv_moe    b1, bucket 1          (same prefill)                                   6057.0 ->  548.1 ->  325.1 (18.6x)
+conv_moe    b4, bucket 4                                                           (n/a)  ->  (n/a) ->  704.4
+conv_moe    b32                   355496.1 -> 7079.4 -> 6193.7 (57.4x)             6056.5 -> 1619.3 -> 1582.0 (3.8x)
+conv_dense  b1                      5102.1 -> 4391.3 -> 3691.1 (1.38x)              684.9 ->  332.7 ->  310.5 (2.2x)
+conv_dense  b32                     5100.8 -> 4388.3 -> 3686.6 (1.38x)              685.4 ->  332.0 ->  311.0 (2.2x)
+(conv_dense ignores the bucket.)

@@ -183,7 +183,12 @@ def run_prefill(decoder, rope, mesh_device, layout, user, chunk_size, continuati
         else:
             kw = dict(
                 conv_inputs=ConvPrefillInputs.create(
-                    mesh_device, slot=user.slot, valid_len=n, padded_len=s_pad, continuation=pos > 0
+                    mesh_device,
+                    slot=user.slot,
+                    valid_len=n,
+                    padded_len=s_pad,
+                    continuation=pos > 0,
+                    windowed=getattr(decoder, "conv_prefill_windowed", False),
                 )
             )
         out = decoder.prefill_forward(tt_x, **kw)
@@ -199,8 +204,9 @@ def run_prefill(decoder, rope, mesh_device, layout, user, chunk_size, continuati
 class DecodeInputs:
     """Persistent decode inputs (stable addresses for trace capture); refreshed by host copies."""
 
-    def __init__(self, mesh_device, H, max_blocks_per_seq, batch=TILE):
+    def __init__(self, mesh_device, H, max_blocks_per_seq, batch=TILE, active_slots=None):
         self.mesh_device = mesh_device
+        self.active_slots = active_slots  # static decode bucket (optimized decoder): only slots < b active
         self.x = to_dev(torch.zeros(1, 1, batch, H), mesh_device)
         self.cur_pos = to_dev(
             torch.full((batch,), -1, dtype=torch.int32), mesh_device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
@@ -209,11 +215,16 @@ class DecodeInputs:
             torch.zeros(1, batch, dtype=torch.int32), mesh_device, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
         )
         self.slot_active = to_dev(torch.zeros(1, 1, batch, 1), mesh_device)
+        self.slot_mask = to_dev(torch.zeros(1, 1, batch, H), mesh_device)  # slot_active broadcast over H
         self.page_table = to_dev(
             torch.zeros(batch, max_blocks_per_seq, dtype=torch.int32), mesh_device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
         )
 
     def update(self, x, cur_pos, page_table):
+        if self.active_slots is not None:
+            from ..tt.optimized_decoder import validate_decode_bucket
+
+            validate_decode_bucket(cur_pos, self.active_slots)
         host = lambda t, dt, lay: ttnn.from_torch(
             t, dtype=dt, layout=lay, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
         )
@@ -224,12 +235,27 @@ class DecodeInputs:
         ttnn.copy_host_to_device_tensor(host(page_table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.page_table)
         active = (cur_pos >= 0).to(torch.float32).reshape(1, 1, -1, 1)
         ttnn.copy_host_to_device_tensor(host(active, ttnn.bfloat16, ttnn.TILE_LAYOUT), self.slot_active)
+        wide = active.expand(*active.shape[:-1], self.slot_mask.shape[-1]).contiguous()
+        ttnn.copy_host_to_device_tensor(host(wide, ttnn.bfloat16, ttnn.TILE_LAYOUT), self.slot_mask)
 
 
 def decode_step(decoder, rope, inp: DecodeInputs):
+    bucket = {} if inp.active_slots is None else {"active_slots": inp.active_slots}
+    if getattr(decoder, "accepts_slot_mask", False):
+        bucket["slot_mask"] = inp.slot_mask
     if decoder.is_attention:
-        cos, sin = rope.decode_cos_sin(inp.rope_pos)
+        if inp.active_slots is not None and getattr(decoder, "bucketed_rope", False):
+            cos, sin = rope.decode_cos_sin(inp.rope_pos, batch=inp.active_slots)  # b-user cos/sin
+        else:
+            cos, sin = rope.decode_cos_sin(inp.rope_pos)
         return decoder.decode_forward(
-            inp.x, rope=rope, rope_cos=cos, rope_sin=sin, cur_pos=inp.cur_pos, page_table=inp.page_table
+            inp.x,
+            rope=rope,
+            rope_cos=cos,
+            rope_sin=sin,
+            cur_pos=inp.cur_pos,
+            page_table=inp.page_table,
+            slot_active=inp.slot_active,
+            **bucket,
         )
-    return decoder.decode_forward(inp.x, slot_active=inp.slot_active)
+    return decoder.decode_forward(inp.x, slot_active=inp.slot_active, **bucket)

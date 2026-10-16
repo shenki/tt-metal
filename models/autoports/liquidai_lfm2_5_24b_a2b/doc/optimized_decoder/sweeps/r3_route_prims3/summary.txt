@@ -1,0 +1,12 @@
+mm S 1d ibw2#R5#D                                            ops/rep   1  device    3.79 us  gaps   4.32 us  total    8.11
+    MatmulDeviceOperation              cores   2   3.79 us gap 69.41  in0 32[32]x256[256] BFLOAT16 in1 256[256]x64[64]
+mm S 1d ibw4#R5#D                                            ops/rep   1  device    2.80 us  gaps   4.32 us  total    7.12
+    MatmulDeviceOperation              cores   2   2.80 us gap 56.45  in0 32[32]x256[256] BFLOAT16 in1 256[256]x64[64]
+mm S 1d ibw8#R5#D                                            ops/rep   1  device    2.13 us  gaps   4.31 us  total    6.44
+    MatmulDeviceOperation              cores   2   2.13 us gap 53.67  in0 32[32]x256[256] BFLOAT16 in1 256[256]x64[64]
+scatter tile bf16#R5#D                                       ops/rep   5  device   23.51 us  gaps   7.57 us  total   31.08
+    UntilizeCodegenDeviceOperation     cores   2   2.07 us gap 85.91  in0 32[32]x64[64] BFLOAT16 in1 nanxnan
+    UntilizeWithUnpaddingDeviceOperati cores   1   8.48 us gap  1.36  in0 32[32]x32[4] UINT32 in1 nanxnan
+    UntilizeWithUnpaddingDeviceOperati cores   1   8.69 us gap  1.39  in0 32[32]x32[4] BFLOAT16 in1 nanxnan
+    ScatterDeviceOperation             cores  32   2.57 us gap  0.49  in0 32[32]x64[64] BFLOAT16 in1 32[32]x4[4]
+    TilizeDeviceOperation              cores   1   1.70 us gap  1.46  in0 32[32]x64[64] BFLOAT16 in1 nanxnan

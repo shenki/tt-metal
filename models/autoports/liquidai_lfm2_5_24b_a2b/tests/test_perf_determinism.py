@@ -105,7 +105,12 @@ def _prefill_inputs(decoder, mesh_device, layout, user, rope):
     else:
         kw = dict(
             conv_inputs=ConvPrefillInputs.create(
-                mesh_device, slot=user.slot, valid_len=n, padded_len=n, continuation=False
+                mesh_device,
+                slot=user.slot,
+                valid_len=n,
+                padded_len=n,
+                continuation=False,
+                windowed=getattr(decoder, "conv_prefill_windowed", False),
             )
         )
     return tt_x, kw
@@ -117,7 +122,12 @@ def test_perf_determinism_no_fallback(mesh_device, kind):
     run_perf_determinism(mesh_device, kind)
 
 
-def run_perf_determinism(mesh_device, kind, decoder_factory=None, decode_iters=DECODE_ITERS):
+def run_perf_determinism(
+    mesh_device, kind, decoder_factory=None, decode_iters=DECODE_ITERS, active_users=TILE, active_slots=None
+):
+    """``active_users``: decode slots with a real token (cur_pos >= 0); the rest are idle
+    (cur_pos = -1, garbage rows), e.g. 1 for single-user latency.  ``active_slots``: static decode
+    bucket of the optimized decoder (the active users then occupy slots 0..active_users-1)."""
     layer_idx = LAYERS[kind]
     cfg = hf_config()
     args = Lfm2MoeArgs.from_hf_config(cfg)
@@ -150,11 +160,19 @@ def run_perf_determinism(mesh_device, kind, decoder_factory=None, decode_iters=D
     ttnn.deallocate(out)
     assert torch.equal(first, second), "prefill is not deterministic for a repeated fresh request"
 
-    # ---------------- decode: all 32 slots active, traced ----------------
-    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq)
+    # ---------------- decode: `active_users` slots active (slot 3 first), traced ----------------
+    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq, active_slots=active_slots)
     gen = torch.Generator().manual_seed(4321)
     x = layer_inputs(TILE, H, 4321, embed).reshape(1, 1, TILE, H).to(torch.bfloat16).float()
     cur = torch.randint(PREFILL_LEN - TILE, PREFILL_LEN + TILE, (TILE,), generator=gen, dtype=torch.int32)
+    if active_slots is None:
+        active = [3] + [s for s in range(TILE) if s != 3][: active_users - 1]
+    else:
+        assert active_users <= active_slots
+        active = list(range(active_users))
+    idle = torch.ones(TILE, dtype=torch.bool)
+    idle[active] = False
+    cur[idle] = -1
     inp.update(x, cur, layout.decode_table(users))
     snapshot = _snapshot_state(decoder)
     out = decode_step(decoder, rope, inp)  # compile
@@ -173,7 +191,10 @@ def run_perf_determinism(mesh_device, kind, decoder_factory=None, decode_iters=D
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
         replays.append(from_dev(trace_out, mesh_device))
         _restore_state(decoder, snapshot)
-    assert torch.equal(replays[0], replays[1]), "traced decode replay is not deterministic"
+    # idle slots (cur_pos = -1) have undefined output rows by contract (attention skips them);
+    # every downstream op is row-local, so only active rows are compared
+    rows = torch.tensor(active)
+    assert torch.equal(replays[0][..., rows, :], replays[1][..., rows, :]), "traced decode replay is not deterministic"
 
     # warmed measurement window: DECODE_ITERS replays (state advances; values are not checked)
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)

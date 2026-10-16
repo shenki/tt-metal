@@ -1,0 +1,34 @@
+--- liquidai_lfm2_5_24b_a2b/tt/optimized_decoder.py	2026-10-16 22:26:39.420698594 +1030
++++ lfm2_r3_bfp4/tt/optimized_decoder.py (fields only)	2026-10-16 22:47:20.068451204 +1030
+@@ -49,6 +49,11 @@
+     expert_gate_up: str = "bf16"
+     expert_down: str = "bf16"
+     expert_fidelity: str = "hifi2"
++    # stacked (decode / sparse_matmul) expert copy only; "" = same as expert_gate_up / expert_down.
++    # The per-expert prefill dispatch copy keeps expert_gate_up / expert_down (hybrid dispatch needs
++    # one dtype for gate_up and down); expert_fidelity applies to the stacked copy only.
++    expert_gate_up_decode: str = ""
++    expert_down_decode: str = ""
+     attn_qkv: str = "bf16"
+     attn_out: str = "bf16"
+     attn_fidelity: str = "hifi2"
+@@ -645,13 +650,16 @@
+
+ class OptimizedMoE(FusedMoE):
+     def __init__(self, mesh_device, args, sd, policy: Policy, fusions):
+-        super().__init__(mesh_device, args, sd, DTYPES[policy.expert_gate_up], fusions)
++        gu_dec = policy.expert_gate_up_decode or policy.expert_gate_up
++        down_dec = policy.expert_down_decode or policy.expert_down
++        super().__init__(mesh_device, args, sd, DTYPES[gu_dec], fusions)
+         self.policy = policy
+-        if policy.expert_down != policy.expert_gate_up:
++        if down_dec != gu_dec:
+             from .functional_decoder import _as_tt
+
+             _, _, down = stacked_expert_weights(sd, self.E)
+-            self.w_down = _as_tt(down.transpose(1, 2).unsqueeze(0), mesh_device, dtype=DTYPES[policy.expert_down])
++            ttnn.deallocate(self.w_down)
++            self.w_down = _as_tt(down.transpose(1, 2).unsqueeze(0), mesh_device, dtype=DTYPES[down_dec])
+         self.ckc = _ckc(mesh_device, policy.expert_fidelity)
+         if policy.moe_dispatch_min_rows:
+             self._init_dispatch(sd)

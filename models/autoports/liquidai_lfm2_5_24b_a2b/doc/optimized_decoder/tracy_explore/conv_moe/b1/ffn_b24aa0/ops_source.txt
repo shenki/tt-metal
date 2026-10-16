@@ -1,0 +1,3 @@
+ffn_b24aa0 base=default policy={"dispatch_fidelity":"lofi"} batch=1
+generated/profiler/reports/2026_10_15_23_43_38/ops_perf_results_2026_10_15_23_43_38.csv
+fee73388

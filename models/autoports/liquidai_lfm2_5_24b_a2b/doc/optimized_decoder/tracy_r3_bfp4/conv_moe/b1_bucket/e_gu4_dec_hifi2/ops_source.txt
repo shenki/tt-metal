@@ -1,0 +1,3 @@
+e_gu4_dec_hifi2 policy={"expert_gate_up_decode": "bfp4"} batch=1 bucket=1
+generated/profiler/reports/2026_10_16_23_00_23/ops_perf_results_2026_10_16_23_00_23.csv mtime=2026-10-16 23:00:24.223409334 +1030
+a97b93473832e289 (sha256 of lfm2_r3_bfp4 tt/*.py + bench files)

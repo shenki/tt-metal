@@ -1,0 +1,8 @@
+Tracy device time per pass (tt-perf-report --csv 'Device Time', us). baseline = BASELINE_POLICY (== stage-2 fused graph), optimized = DEFAULT_POLICY.
+decode window: 5 traced replays; prefill: one fresh 2048-token chunk. All windows complete (op counts multiple of the pass count).
+attn_moe   batch  1: prefill   337358.2 ->    7601.3 ( 44.4x, complete True) | decode     6924.6 ->    1113.3 (  6.2x, complete True)
+attn_moe   batch 32: prefill   337470.9 ->    7596.0 ( 44.4x, complete True) | decode     6141.3 ->    2049.5 (  3.0x, complete True)
+conv_moe   batch  1: prefill   355499.7 ->    7080.7 ( 50.2x, complete True) | decode     6057.0 ->     548.1 ( 11.1x, complete True)
+conv_moe   batch 32: prefill   355496.1 ->    7079.4 ( 50.2x, complete True) | decode     6056.5 ->    1619.3 (  3.7x, complete True)
+conv_dense batch  1: prefill     5102.1 ->    4391.3 (  1.2x, complete True) | decode      684.9 ->     332.7 (  2.1x, complete True)
+conv_dense batch 32: prefill     5100.8 ->    4388.3 (  1.2x, complete True) | decode      685.4 ->     332.0 (  2.1x, complete True)

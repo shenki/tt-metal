@@ -1,0 +1,343 @@
+--- liquidai_lfm2_5_24b_a2b/tt/optimized_decoder.py	2026-10-16 22:26:39.420698594 +1030
++++ lfm2_r3_attn/tt/optimized_decoder.py	2026-10-16 23:16:45.407702110 +1030
+@@ -22,6 +22,9 @@
+     FusedDenseMLP,
+     FusedMoE,
+     FusedShortConv,
++    _height_shard,
++    _row_major_cores,
++    decode_head_mem,
+     make_rope,
+ )
+ from .model_config import Lfm2MoeArgs
+@@ -118,6 +121,27 @@
+     router_ds_cores: int = 0
+     router_kth_slice: bool = False  # k-th largest biased score = last column of the sorted topk values
+     decode_residual_l1: bool = False  # decode residual adds (layer outputs) in L1 instead of DRAM
++    # ---- attention decode plumbing (stage 3 round 3) ----
++    # nlp_create_qkv_heads_decode reads the DRAM-sharded qkv output (width-sharded L1) directly
++    # (no sharded->interleaved conversion; the interleaved-input kernel is 15 us vs ~3); needs ds_wqkv
++    attn_heads_sharded: bool = False
++    # paged_fused_update_cache (K and V in one op, V resharded to a disjoint grid) for decode buckets
++    # b <= this (0 = two paged_update_cache; 32 = always)
++    attn_kv_fused_max_bucket: int = 0
++    # bucketed decode: concat the b-user SDPA output straight into a zeroed [32, NH*HD] L1 buffer
++    # (copied from a DRAM zeros tensor; the op writes rows < b only, rows >= b stay 0) instead of
++    # ttnn.pad back to 32 users; the concat output is resharded directly (sharded -> sharded) into
++    # the out-projection input layout
++    attn_pad_free: bool = False
++    # bucketed decode: split heads for the b active users only (nlp_create_qkv_heads_decode
++    # slice_size=b), so q/k-norm, RoPE, the KV update and SDPA run on b-user tensors; needs b-user
++    # cos/sin from the caller (``rope.decode_cos_sin(rope_pos, batch=b)`` when
++    # ``decoder.bucketed_rope``), else the 32-user split is used
++    attn_bucket_heads: bool = False
++    # decode attention residual on the out-projection's width-sharded output: x is resharded once
++    # (operator-norm input layout = out-proj output layout = ffn-norm input layout), h = x + attn is
++    # a sharded add consumed by the sharded ffn norm (no S2I + DRAM add + I2S); MoE ffn only
++    attn_residual_sharded: bool = False
+
+     def summary(self):
+         return {k: getattr(self, k) for k in self.__dataclass_fields__}
+@@ -199,9 +223,11 @@
+         self.eps, self.ckc = eps, ckc
+
+     def __call__(self, x, weight):
+-        xs = ttnn.to_memory_config(x, self.mem)
++        already = x.memory_config() == self.mem  # caller keeps ownership of an already-sharded input
++        xs = x if already else ttnn.to_memory_config(x, self.mem)
+         y = ttnn.rms_norm(xs, epsilon=self.eps, weight=weight, program_config=self.cfg, memory_config=self.mem, compute_kernel_config=self.ckc)
+-        ttnn.deallocate(xs)
++        if not already:
++            ttnn.deallocate(xs)
+         return y
+
+
+@@ -367,6 +393,15 @@
+         ttnn.deallocate(o)
+         return oi
+
++    def decode_sharded(self, x, ckc):
++        """Decode matmul, output left in its width-sharded L1 layout (``out_mem``)."""
++        already = x.memory_config() == self.in_mem
++        xs = x if already else ttnn.to_memory_config(x, self.in_mem)
++        o = ttnn.linear(xs, self.weight, program_config=self.decode_cfg, compute_kernel_config=ckc, memory_config=self.out_mem)
++        if not already:
++            ttnn.deallocate(xs)
++        return o
++
+     def prefill(self, x, ckc, mem=DRAM):
+         m = x.shape[-2]
+         if m not in self._prefill_cfgs:
+@@ -388,10 +423,35 @@
+     return h
+
+
++_ZERO_ROWS = {}  # device id -> (device, DRAM zeros [1, 1, 32, NH*HD]) shared by all layers
++
++
+ class OptimizedAttention(FusedAttention):
+     def __init__(self, mesh_device, args, sd, max_batch_size, policy: Policy, fusions, sdpa_chunk=256):
+         super().__init__(mesh_device, args, sd, max_batch_size, DTYPES[policy.attn_qkv], fusions, sdpa_chunk=sdpa_chunk)
+         self.policy = policy
++        self.r3_decode = bool(
++            policy.attn_heads_sharded
++            or policy.attn_kv_fused_max_bucket
++            or policy.attn_pad_free
++            or policy.attn_bucket_heads
++        )
++        if self.r3_decode:
++            assert {"qkv_heads_decode", "rope_hf", "concat_heads_decode"} <= set(fusions)
++            assert not policy.attn_heads_sharded or policy.ds_wqkv, "attn_heads_sharded needs ds_wqkv"
++            assert not policy.attn_bucket_heads or policy.attn_heads_sharded, "slice_size needs the sharded qkv input"
++        self._bmems = {}
++        if policy.attn_bucket_heads:
++            import torch
++
++            self.batch_offset0 = ttnn.from_torch(  # nlp_create_qkv_heads_decode slice start (slot 0)
++                torch.zeros(1, dtype=torch.int32), dtype=ttnn.uint32, device=mesh_device,
++                memory_config=DRAM, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
++            )
++        if policy.attn_kv_fused_max_bucket:
++            grid = mesh_device.compute_with_storage_grid_size()
++            # paged_fused_update_cache needs K and V shards on disjoint core grids
++            self.v_fused_mem = _height_shard(_row_major_cores(self.B, self.B, grid.x), (TILE, self.HD))
+         if policy.attn_out != policy.attn_qkv:
+             from .functional_decoder import _as_tt
+
+@@ -476,7 +536,123 @@
+             return super()._out_project(attn, residual)
+         return _add_residual(self.ds_wo(attn, self.ckc, DRAM), residual, self.policy)
+
++    def _concat_out_buf(self, mem):
++        """Zeroed L1 concat-heads output.  Not persistent in L1: the prefill hybrid routed-expert op
++        claims the whole L1 bank as its arena, so a DRAM zeros tensor is copied in per call."""
++        hit = _ZERO_ROWS.get(id(self.mesh_device))
++        if hit is None or hit[0] is not self.mesh_device:
++            import torch
++
++            t = ttnn.from_torch(
++                torch.zeros(1, 1, self.B, self.NH * self.HD), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
++                device=self.mesh_device, memory_config=DRAM, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
++            )
++            hit = _ZERO_ROWS[id(self.mesh_device)] = (self.mesh_device, t)
++        return ttnn.to_memory_config(hit[1], mem)
++
++    def _bucket_mems(self, b):
++        """Per-bucket b-user layouts: q/k/v heads (SDPA grid width), V for the fused KV update."""
++        mems = self._bmems.get(b)
++        if mems is None:
++            grid = self.mesh_device.compute_with_storage_grid_size()
++            mems = self._bmems[b] = (
++                decode_head_mem(self.mesh_device, b, self.HD),
++                _height_shard(_row_major_cores(b, b, grid.x), (TILE, self.HD)),
++            )
++        return mems
++
++    def _decode_r3(self, x, rope_cos, rope_sin, rope, cur_pos, page_table, residual, b):
++        p = self.policy
++        B, NH, HD = x.shape[-2], self.NH, self.HD
++        # b-user head split: only when the caller built b-user cos/sin (rope.decode_cos_sin(.., batch=b))
++        nb = b if (p.attn_bucket_heads and b < B and rope_cos.shape[1] == b) else B
++        head_mem, v_fused_mem = (self.head_mem, getattr(self, "v_fused_mem", None)) if nb == B else self._bucket_mems(nb)
++        if p.attn_heads_sharded:
++            qkv = self.ds_qkv.decode_sharded(x, self.ckc)  # width-sharded L1, whole heads per shard
++        else:
++            qkv = self._qkv_linear(x, L1)
++        kw = {} if nb == B else dict(batch_offset=self.batch_offset0, slice_size=nb)
++        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
++            qkv, num_heads=NH, num_kv_heads=self.NKV, memory_config=head_mem, **kw
++        )  # [1, nb, 32(pad), HD] height-sharded, one user per core
++        ttnn.deallocate(qkv)
++        # per-head RMSNorm rejects height-sharded inputs: L1 interleaved round trip (on nb users)
++        q = ttnn.to_memory_config(self._qk_norm_f(ttnn.to_memory_config(q, L1), "q", L1), head_mem)
++        k = ttnn.to_memory_config(self._qk_norm_f(ttnn.to_memory_config(k, L1), "k", L1), head_mem)
++        q = rope.apply_hf(q, rope_cos, rope_sin, True, self.ckc_sdpa)
++        k = rope.apply_hf(k, rope_cos, rope_sin, True, self.ckc_sdpa)
++        full_pos, full_pt = cur_pos, page_table
++        # a caller may pass b-row page_table / cur_pos (sliced once per step for all layers)
++        sliced = b < B and page_table.shape[0] > b
++        assert page_table.shape[0] in (b, B) and (nb < B or page_table.shape[0] == B)
++        if sliced:  # SDPA (and the b-user KV update) see rows < b only
++            page_table = ttnn.slice(page_table, (0, 0), (b, page_table.shape[-1]))
++            cur_pos = ttnn.slice(cur_pos, (0,), (b,))
++        # 32-user k/v: the update takes all 32 indices (idle slots -1 are skipped)
++        upd_pos, upd_pt = (cur_pos, page_table) if nb < B else (full_pos, full_pt)
++        if b <= p.attn_kv_fused_max_bucket:
++            v_d = ttnn.to_memory_config(v, v_fused_mem)
++            ttnn.deallocate(v)
++            v = v_d
++            ttnn.experimental.paged_fused_update_cache(
++                self.k_cache, k, self.v_cache, v, update_idxs_tensor=upd_pos, page_table=upd_pt
++            )
++        else:
++            ttnn.experimental.paged_update_cache(self.k_cache, k, update_idxs_tensor=upd_pos, page_table=upd_pt)
++            ttnn.experimental.paged_update_cache(self.v_cache, v, update_idxs_tensor=upd_pos, page_table=upd_pt)
++        ttnn.deallocate(k)
++        ttnn.deallocate(v)
++        # q rows == page-table rows: no slicing / padding inside (q with 32 users reads rows < b)
++        attn = self._sdpa_decode(q, cur_pos, page_table, pad=not p.attn_pad_free)  # [1, b, NH(32), HD] L1
++        ttnn.deallocate(q)
++        if sliced:
++            ttnn.deallocate(page_table)
++            ttnn.deallocate(cur_pos)
++        if not p.attn_pad_free:
++            assert residual is None or not residual.is_sharded(), "attn_residual_sharded needs attn_pad_free"
++            return self._out_proj_decode(attn, B, residual)
++        rows = attn.shape[1]
++        # nlp_concat_heads_decode needs its input on a rectangular rows-core grid at (0, 0); it writes
++        # output rows < rows only, so a zeroed output keeps the idle rows exactly 0
++        cin = _height_shard(ttnn.CoreGrid(y=max(1, rows // 8), x=min(rows, 8)), (TILE, HD))
++        attn_sh = ttnn.to_memory_config(attn, cin)
++        ttnn.deallocate(attn)
++        on_wo_grid = self.ds_wo is not None and self.ds_wo.in_mem == self._concat_mem()
++        cmem = self.ds_wo.in_mem if on_wo_grid else self._concat_mem()
++        if rows < B:
++            buf = self._concat_out_buf(cmem)
++        else:  # every row is written
++            buf = ttnn.empty((1, 1, B, NH * HD), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh_device, cmem)
++        ttnn.experimental.nlp_concat_heads_decode(attn_sh, num_heads=NH, output_tensor=buf)
++        ttnn.deallocate(attn_sh)
++        if self.ds_wo is None:
++            o = ttnn.to_memory_config(buf, L1)
++            out = ttnn.linear(o, self.wo, compute_kernel_config=self.ckc, memory_config=DRAM)
++            ttnn.deallocate(o)
++        elif residual is not None and residual.is_sharded():
++            out = self.ds_wo.decode_sharded(buf, self.ckc)  # sharded -> sharded reshard in
++            ttnn.deallocate(buf)
++            return self._sharded_residual_add(out, residual)
++        else:
++            out = self.ds_wo.decode(buf, self.ckc, DRAM)  # sharded -> sharded reshard (none on the wo grid)
++        ttnn.deallocate(buf)
++        return _add_residual(out, residual, p)
++
++    def _sharded_residual_add(self, out, residual):
++        assert out.memory_config() == residual.memory_config(), (out.memory_config(), residual.memory_config())
++        h = ttnn.add(residual, out, memory_config=residual.memory_config())
++        ttnn.deallocate(out)
++        return h
++
++    def _concat_mem(self):
++        return width_shard_layout(self.mesh_device, self.NH, self.HD)  # 8 x 4 rectangle, one head per core
++
+     def decode_forward(self, x, *, active_slots=None, **kw):
++        if self.r3_decode:
++            return self._decode_r3(
++                x, kw["rope_cos"], kw["rope_sin"], kw["rope"], kw["cur_pos"], kw["page_table"], kw.get("residual"),
++                active_slots or x.shape[-2],
++            )
+         # static per-trace bucket, consumed by _sdpa_decode (the stage-2 forward is reused unchanged)
+         self._active_slots = active_slots
+         try:
+@@ -484,7 +660,7 @@
+         finally:
+             self._active_slots = None
+
+-    def _sdpa_decode(self, q, cur_pos, page_table):
++    def _sdpa_decode(self, q, cur_pos, page_table, pad=True):
+         p = self.policy
+         cfg = ttnn.SDPAProgramConfig(
+             compute_with_storage_grid_size=self.grid,
+@@ -514,6 +690,7 @@
+         if b < B:
+             ttnn.deallocate(page_table)
+             ttnn.deallocate(cur_pos)
++        if b < B and pad:
+             padded = ttnn.pad(out, [(0, 0), (0, B - b), (0, 0), (0, 0)], 0.0)
+             ttnn.deallocate(out)
+             out = padded
+@@ -1125,6 +1302,11 @@
+
+     accepts_slot_mask = True  # decode_forward(slot_mask=[1, 1, B, H]) (see decode_forward)
+
++    @property
++    def bucketed_rope(self):
++        """Decode callers pass ``rope.decode_cos_sin(rope_pos, batch=active_slots)`` (b-user cos/sin)."""
++        return self.is_attention and self.policy.attn_bucket_heads
++
+     @classmethod
+     def from_state_dict(
+         cls,
+@@ -1202,6 +1384,7 @@
+         ttnn.deallocate(hn)
+         if hs is not None:
+             ttnn.deallocate(hs)
++        # (h may be the width-sharded attention residual: attn_residual_sharded)
+         out = ttnn.add(h, f, memory_config=L1 if (decode and self.policy.decode_residual_l1) else DRAM)
+         ttnn.deallocate(f)
+         return out
+@@ -1223,8 +1406,18 @@
+         only slots 0..b-1 can be active (cur_pos -1 for the rest).  None = all 32 slots.
+         ``slot_mask``: optional ``slot_active`` broadcast to ``[1, 1, B, H]`` (built once per step by the
+         caller): the ShortConv state updates then run as full-width ``where`` (3.1 vs 8.5 us each)."""
++        resid_sh = (
++            self.is_attention
++            and self.policy.attn_residual_sharded
++            and self.policy.attn_pad_free
++            and self.op_norm_sh is not None
++            and isinstance(self.ffn, OptimizedMoE)
++            and self.ffn_norm_sh is not None
++            and self.ffn_norm_sh.mem == self.op_norm_sh.mem
++        )
++        xs = ttnn.to_memory_config(x, self.op_norm_sh.mem) if resid_sh else None  # residual, sharded once
+         if self.op_norm_sh is not None:
+-            xn = self.op_norm_sh(x, self.operator_norm)  # already in the qkv / in_proj input layout
++            xn = self.op_norm_sh(xs if resid_sh else x, self.operator_norm)  # already in the qkv / in_proj input layout
+         else:
+             xn = self._norm(x, self.operator_norm, L1)
+         if self.is_attention:
+@@ -1235,9 +1428,11 @@
+                 rope_sin=rope_sin,
+                 cur_pos=cur_pos,
+                 page_table=page_table,
+-                residual=x,
++                residual=xs if resid_sh else x,
+                 active_slots=active_slots,
+             )
++            if resid_sh:
++                ttnn.deallocate(xs)
+         else:
+             h = self.mixer.decode_forward(xn, slot_active if slot_mask is None else slot_mask, residual=x)
+         ttnn.deallocate(xn)
+--- liquidai_lfm2_5_24b_a2b/tt/fused_decoder.py	2026-10-16 00:33:43.068521920 +1030
++++ lfm2_r3_attn/tt/fused_decoder.py	2026-10-16 22:45:34.724425918 +1030
+@@ -129,14 +129,22 @@
+     def __init__(self, mesh_device, args: Lfm2MoeArgs, max_seq_len=None, batch=TILE):
+         super().__init__(mesh_device, args, max_seq_len=max_seq_len)
+         self.head_mem = decode_head_mem(mesh_device, batch, self.head_dim)
++        self._bucket_head_mems = {}
+
+-    def decode_cos_sin(self, rope_pos):
+-        """``rope_pos`` uint32 ``[1, B]`` -> sharded cos/sin ``[1, B, 1, hd]``."""
++    def decode_cos_sin(self, rope_pos, batch=None):
++        """``rope_pos`` uint32 ``[1, B]`` -> sharded cos/sin ``[1, B, 1, hd]``; ``batch`` < B: users
++        0..batch-1 only (``[1, batch, 1, hd]`` on ``batch`` cores, for bucketed decode)."""
++        head_mem, pos = self.head_mem, rope_pos
++        if batch is not None and batch < rope_pos.shape[-1]:
++            head_mem = self._bucket_head_mems.setdefault(batch, decode_head_mem(self.mesh_device, batch, self.head_dim))
++            pos = ttnn.slice(rope_pos, (0, 0), (1, batch))
+         out = []
+         for table in (self.cos_rm, self.sin_rm):
+-            t = ttnn.embedding(rope_pos, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, B, hd]
++            t = ttnn.embedding(pos, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, B, hd]
+             t = ttnn.transpose(ttnn.unsqueeze_to_4D(t), 1, 2)  # [1, B, 1, hd]
+-            out.append(ttnn.interleaved_to_sharded(t, self.head_mem))
++            out.append(ttnn.interleaved_to_sharded(t, head_mem))
++        if pos is not rope_pos:
++            ttnn.deallocate(pos)
+         return out
+
+     def apply_hf(self, x, cos, sin, decode, ckc):
+--- liquidai_lfm2_5_24b_a2b/tests/harness.py	2026-10-16 22:26:39.420923231 +1030
++++ lfm2_r3_attn/tests/harness.py	2026-10-16 22:45:34.724587645 +1030
+@@ -244,7 +244,10 @@
+     if getattr(decoder, "accepts_slot_mask", False):
+         bucket["slot_mask"] = inp.slot_mask
+     if decoder.is_attention:
+-        cos, sin = rope.decode_cos_sin(inp.rope_pos)
++        if inp.active_slots is not None and getattr(decoder, "bucketed_rope", False):
++            cos, sin = rope.decode_cos_sin(inp.rope_pos, batch=inp.active_slots)  # b-user cos/sin
++        else:
++            cos, sin = rope.decode_cos_sin(inp.rope_pos)
+         return decoder.decode_forward(
+             inp.x,
+             rope=rope,

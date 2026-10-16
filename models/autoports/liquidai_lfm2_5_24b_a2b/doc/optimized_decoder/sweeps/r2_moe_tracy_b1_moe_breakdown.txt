@@ -1,0 +1,67 @@
+== conv_moe b1 default: layer decode 547.9 us; MoE (router..combine) 437.7 us; sparse mm [114.1, 70.0] DRAM% [43.1, 35.1]
+   ReshapeViewDeviceOperation                                      15.1
+   TransposeDeviceOperation                                         4.0
+   MatmulDeviceOperation b={8} x 32 x 256 x 64                      7.3
+   TransposeDeviceOperation                                         4.5
+   ReduceDeviceOperation                                            2.9
+   TransposeDeviceOperation                                         2.0
+   UnaryDeviceOperation                                             3.4
+   BinaryNgDeviceOperation                                          3.4
+   TopKDeviceOperation                                             16.2
+   FillPadDeviceOperation                                           7.2
+   ReduceDeviceOperation                                            1.8
+   BinaryNgDeviceOperation                                          7.3
+   BinaryNgDeviceOperation                                          3.0
+   ReduceDeviceOperation                                            2.1
+   BinaryNgDeviceOperation                                          4.6
+   BinaryNgDeviceOperation                                          7.9
+   TypecastDeviceOperation                                          2.0
+   BinaryNgDeviceOperation                                          3.4
+   ReduceDeviceOperation                                            2.0
+   UntilizeWithUnpaddingDeviceOperation                             1.5
+   UnaryDeviceOperation                                            22.8
+   SparseMatmulDeviceOperation active=4/64 x 32 x 2048 x 3072     114.1
+   SliceDeviceOperation                                            11.5
+   SliceDeviceOperation                                            11.4
+   BinaryNgDeviceOperation                                         50.2
+   UnaryDeviceOperation                                            14.1
+   SparseMatmulDeviceOperation active=4/64 x 32 x 1536 x 2048      70.0
+   PermuteDeviceOperation                                           6.1
+   BinaryNgDeviceOperation                                         25.6
+   FastReduceNCDeviceOperation                                     10.2
+== conv_moe b1 compact_final: layer decode 363.1 us; MoE (router..combine) 252.4 us; sparse mm [72.6, 38.9] DRAM% [67.7, 63.1]
+   ReshapeViewDeviceOperation                                      15.1
+   TransposeDeviceOperation                                         3.9
+   MatmulDeviceOperation b={8} x 32 x 256 x 64                      7.4
+   TransposeDeviceOperation                                         4.3
+   ReduceDeviceOperation                                            2.9
+   TransposeDeviceOperation                                         2.1
+   UnaryDeviceOperation                                             3.4
+   BinaryNgDeviceOperation                                          3.4
+   TopKDeviceOperation                                             16.3
+   FillPadDeviceOperation                                           7.2
+   ReduceDeviceOperation                                            1.7
+   BinaryNgDeviceOperation                                          7.3
+   BinaryNgDeviceOperation                                          3.1
+   ReduceDeviceOperation                                            2.2
+   BinaryNgDeviceOperation                                          4.6
+   BinaryNgDeviceOperation                                          7.9
+   TypecastDeviceOperation                                          2.0
+   TypecastDeviceOperation                                          1.1
+   MatmulDeviceOperation 32 x 32 x 32                               1.3
+   BinaryNgDeviceOperation                                          7.2
+   MatmulDeviceOperation 32 x 64 x 32                               1.4
+   BinaryNgDeviceOperation                                          6.7
+   TypecastDeviceOperation                                          1.2
+   UntilizeWithUnpaddingDeviceOperation                             1.2
+   TypecastDeviceOperation                                          1.1
+   UnaryDeviceOperation                                             3.6
+   SparseMatmulDeviceOperation active=4/64 x 32 x 2048 x 3072      72.5
+   SliceDeviceOperation                                             2.1
+   SliceDeviceOperation                                             2.1
+   BinaryNgDeviceOperation                                          5.7
+   UnaryDeviceOperation                                             2.6
+   SparseMatmulDeviceOperation active=4/64 x 32 x 1536 x 2048      38.9
+   PermuteDeviceOperation                                           2.5
+   BinaryNgDeviceOperation                                          4.3
+   FastReduceNCDeviceOperation                                      2.4

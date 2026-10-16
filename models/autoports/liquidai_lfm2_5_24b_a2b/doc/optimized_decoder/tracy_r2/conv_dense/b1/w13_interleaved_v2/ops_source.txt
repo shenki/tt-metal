@@ -1,0 +1,3 @@
+w13_interleaved_v2 base=default policy={"ds_dense_w13": null, "ds_dense_w2": [46, 8, 2]} batch=1
+generated/profiler/reports/2026_10_16_20_07_55/ops_perf_results_2026_10_16_20_07_55.csv
+fee73388

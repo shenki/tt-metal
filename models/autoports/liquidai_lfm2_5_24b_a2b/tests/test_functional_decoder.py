@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 
-from ..reference.hf_layer import build_hf_layer, hf_layer_forward
+from ..reference.hf_layer import build_hf_layer, hf_layer_forward, near_tie_alternatives
 from ..tt.functional_decoder import FunctionalDecoder, RopeSetup
 from ..tt.model_config import TILE, Lfm2MoeArgs
 from .harness import (
@@ -65,11 +65,17 @@ def run_case(
     chunk_size,
     trace_decode=True,
     max_seq_len=None,
-    kv_dtype=ttnn.bfloat16,
+    kv_dtype=None,  # None: the decoder's own default (functional/fused: BF16)
     reserve_seqs=None,
     decoder_factory=None,
+    active_slots=None,  # optimized decoder: static decode bucket (users must sit in slots < it)
+    hf_patch=None,  # callable(hf_layer) applied before the reference forward (router near-tie control)
+    user_inputs=None,  # callable(user) -> [prompt_len + decode_steps, H] layer input (default: embedding rows)
 ):
-    logger.info(f"TT_METAL_TRACE_ALLOC_TRACKING={os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING')}")
+    logger.info(
+        f"TT_METAL_TRACE_ALLOC_TRACKING={os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING')} "
+        f"TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE={os.environ.get('TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE')}"
+    )
     cfg = hf_config()
     args = Lfm2MoeArgs.from_hf_config(cfg)
     real = _use_real()
@@ -81,15 +87,22 @@ def run_case(
 
     # HF reference: one causal full-sequence forward per user
     hf_layer, hf_rope = build_hf_layer(cfg, layer_idx, sd)
+    if hf_patch is not None:
+        hf_patch(hf_layer)
     for u in users:
-        u.x = layer_inputs(u.prompt_len + u.decode_steps, H, u.seed, embed).to(torch.bfloat16).float()
+        if user_inputs is not None:
+            u.x = user_inputs(u).to(torch.bfloat16).float()
+        else:
+            u.x = layer_inputs(u.prompt_len + u.decode_steps, H, u.seed, embed).to(torch.bfloat16).float()
         u.ref = hf_layer_forward(hf_layer, hf_rope, u.x.unsqueeze(0))[0]
+        u.ref_alts = near_tie_alternatives(hf_layer, hf_rope, u.x, range(u.prompt_len, u.prompt_len + u.decode_steps))
     del hf_layer
 
     decoder, rope = make_decoder(decoder_factory, sd, cfg, args, layer_idx, mesh_device, max(max_seq_len, TILE))
     layout = PagedLayout(users, max_seq_len, reserve_seqs=reserve_seqs)
     if decoder.is_attention:
-        decoder.mixer.allocate_kv_cache(layout.num_blocks, layout.block_size, dtype=kv_dtype)
+        kw = {} if kv_dtype is None else {"dtype": kv_dtype}
+        decoder.mixer.allocate_kv_cache(layout.num_blocks, layout.block_size, **kw)
         logger.info(f"KV cache: {layout.num_blocks} blocks x {layout.block_size} tokens per K and V")
 
     # ---- prefill (chunked, one request at a time, each into its own slot) ----
@@ -97,7 +110,7 @@ def run_case(
         u.tt_prefill = run_prefill(decoder, rope, mesh_device, layout, u, chunk_size)
 
     # ---- decode: all slots each step (inactive slots get cur_pos -1 / garbage rows) ----
-    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq)
+    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq, active_slots=active_slots)
     table = layout.decode_table(users)
     steps = max(u.decode_steps for u in users)
     trace_id = None
@@ -163,7 +176,21 @@ def delta_pccs(u):
         u.delta = (p, 1.0)
         return u.delta
     m = len(u.tt_decode)
-    d = pcc(torch.stack(u.tt_decode) - u.x[n : n + m], u.ref[n : n + m] - u.x[n : n + m])
+    upd = torch.stack(u.tt_decode) - u.x[n : n + m]
+    d = pcc(upd, u.ref[n : n + m] - u.x[n : n + m])
+    # router near-tie (reference.hf_layer.near_tie_alternatives): the decode update may instead match
+    # HF with the tied k-th/(k+1)-th experts swapped at one position; logged, never silent
+    if d < DELTA_PCC_BAR:
+        for pos, gap, alt in getattr(u, "ref_alts", []):
+            d_alt = pcc(upd, alt[n : n + m] - u.x[n : n + m])
+            logger.warning(
+                f"slot {u.slot}: decode update PCC {d:.6f} vs HF; router near-tie at position {pos} "
+                f"(k-th/(k+1)-th biased score gap {gap:.2e}): {d_alt:.6f} vs HF with that swap"
+            )
+            if d_alt >= DELTA_PCC_BAR:
+                u.near_tie = (pos, gap, d, d_alt)
+                d = d_alt
+                break
     u.delta = (p, d)
     return p, d
 
@@ -270,7 +297,10 @@ def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size, decoder_fac
     its decode steps.  Every prefill shape is compiled before trace capture (warm-up into a
     scratch slot / scratch pages), so all post-capture prefill allocations are transient.
     Run under ``TT_METAL_TRACE_ALLOC_TRACKING=1`` to have ``execute_trace`` reject unsafe buffers."""
-    logger.info(f"TT_METAL_TRACE_ALLOC_TRACKING={os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING')}")
+    logger.info(
+        f"TT_METAL_TRACE_ALLOC_TRACKING={os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING')} "
+        f"TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE={os.environ.get('TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE')}"
+    )
     cfg = hf_config()
     args = Lfm2MoeArgs.from_hf_config(cfg)
     H = args.hidden_size
@@ -291,6 +321,7 @@ def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size, decoder_fac
     for u in users:
         u.x = layer_inputs(u.prompt_len + u.decode_steps, H, u.seed, embed).to(torch.bfloat16).float()
         u.ref = hf_layer_forward(hf_layer, hf_rope, u.x.unsqueeze(0))[0]
+        u.ref_alts = near_tie_alternatives(hf_layer, hf_rope, u.x, range(u.prompt_len, u.prompt_len + u.decode_steps))
     del hf_layer
 
     decoder, rope = make_decoder(decoder_factory, sd, cfg, args, layer_idx, mesh_device, max_seq)

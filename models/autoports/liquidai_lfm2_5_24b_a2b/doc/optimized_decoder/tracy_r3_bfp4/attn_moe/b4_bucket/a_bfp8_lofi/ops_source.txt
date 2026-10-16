@@ -1,0 +1,3 @@
+a_bfp8_lofi policy={"attn_fidelity": "lofi"} batch=4 bucket=1
+generated/profiler/reports/2026_10_16_22_55_01/ops_perf_results_2026_10_16_22_55_01.csv mtime=2026-10-16 22:55:03.092208001 +1030
+a97b93473832e289 (sha256 of lfm2_r3_bfp4 tt/*.py + bench files)

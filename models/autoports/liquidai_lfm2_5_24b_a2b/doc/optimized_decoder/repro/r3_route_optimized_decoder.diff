@@ -1,0 +1,236 @@
+--- liquidai_lfm2_5_24b_a2b/tt/optimized_decoder.py	2026-10-16 22:26:39.420698594 +1030
++++ lfm2_r3_route/tt/optimized_decoder.py (route hunks only)	2026-10-16 23:06:48.682766049 +1030
+@@ -118,6 +118,18 @@
+     router_ds_cores: int = 0
+     router_kth_slice: bool = False  # k-th largest biased score = last column of the sorted topk values
+     decode_residual_l1: bool = False  # decode residual adds (layer outputs) in L1 instead of DRAM
++    # decode routing glue without column-broadcast / single-core FillPad ops (T = 32 rows): selection
++    # mask from the topk indices as exact 0/1 matmuls + full-width eq (same expert set as the k-th
++    # value threshold), full-width bias / eps / idle-slot mask, fused bf16 division; compact path
++    # (buckets): ids straight from the topk indices of rows 0..b-1 (the bucket contract: only slots
++    # < b are active) and weights from exact 0/1 matmuls.  Weights bitwise equal to the current path.
++    moe_route_v3: bool = False
++    # moe_route_v3 constants in L1 (index constants shared by all layers).  Must stay off with
++    # moe_dispatch_min_rows: the hybrid prefill expert op allocates every L1 bank in full (OOM)
++    moe_route_v3_l1: bool = False
++    # DS decode router: sigmoid fused into the DRAM-sharded matmul and the E logit columns sliced
++    # straight from its width-sharded output (no sharded->interleaved copy, no separate sigmoid)
++    router_ds_fused: bool = False
+
+     def summary(self):
+         return {k: getattr(self, k) for k in self.__dataclass_fields__}
+@@ -166,6 +178,8 @@
+     moe_compact_max_users=4,  # buckets 1/2/4 (b=8 loses: sweeps/r2_moe_bench.jsonl)
+     moe_gate_up_compact_cfg=(8, 6, 8, 1),
+     moe_down_compact_cfg=(8, 6, 48, 2),
++    moe_route_v3=True,  # bitwise-equal routing; conv_moe decode 325.4->299.4 (b1 bucket) / 706.1->664.0 (b4) / 1579.6->1568.2 us (b32) (sweeps/r3_route_tracy)
++    router_ds_fused=True,  # bitwise-equal scores (fused sigmoid + slice from the sharded output)
+ )
+
+
+@@ -643,6 +657,9 @@
+     )
+
+
++_ROUTE_V3_CONSTS = {}  # moe_route_v3 index constants, shared by every MoE layer on a device
++
++
+ class OptimizedMoE(FusedMoE):
+     def __init__(self, mesh_device, args, sd, policy: Policy, fusions):
+         super().__init__(mesh_device, args, sd, DTYPES[policy.expert_gate_up], fusions)
+@@ -678,13 +695,29 @@
+             wr = torch.nn.functional.pad(sd["feed_forward.gate.weight"].T, (0, n_pad - self.E))  # zero columns, sliced off
+             cores = policy.router_ds_cores
+             self.router_ds = DramShardedLinear(mesh_device, wr, ttnn.bfloat16, (cores, self.H // TILE // cores, 1))
++            c = self.router_ds.decode_cfg
++            self.router_ds_sig_cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
++                in0_block_w=c.in0_block_w, per_core_M=c.per_core_M, per_core_N=c.per_core_N,
++                fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
++            )
+         if policy.moe_compact_max_users:
+             self._init_compact()
++        if policy.moe_route_v3:
++            self._init_route_v3(sd)
+
+     def _router_scores(self, x):
+         if not self.policy.router_bf16:
+             return super()._router_scores(x)
+         T = x.shape[-2]
++        if self.router_ds is not None and self._x_sharded is not None and T <= TILE and self.policy.router_ds_fused:
++            ds = self.router_ds
++            o = ttnn.linear(
++                self._x_sharded, ds.weight, program_config=self.router_ds_sig_cfg, compute_kernel_config=self.ckc_router,
++                memory_config=ds.out_mem, dtype=ttnn.float32,
++            )
++            scores = ttnn.slice(o, (0, 0, 0, 0), (1, 1, T, self.E), memory_config=L1)
++            ttnn.deallocate(o)
++            return scores
+         if self.router_ds is not None and self._x_sharded is not None and T <= TILE:
+             ds = self.router_ds
+             o = ttnn.linear(
+@@ -969,11 +1002,151 @@
+         ttnn.deallocate(ids_u)
+         return ids_u16, wc
+
++    # ---------------- decode routing v3 (Policy.moe_route_v3) ----------------
++    def _init_route_v3(self, sd):
++        """Constants of the broadcast-free decode routing (T = 32 rows, E experts, top-K)."""
++        import torch
++
++        from .functional_decoder import _as_tt
++
++        md, E, K, T = self.mesh_device, self.E, self.K, TILE
++        assert self.scale == 1.0, "moe_route_v3 folds routed_scaling_factor 1.0"
++        f32, bf = ttnn.float32, ttnn.bfloat16
++        mem = L1 if self.policy.moe_route_v3_l1 else DRAM
++        bias = sd["feed_forward.expert_bias"].float().reshape(1, E)
++        self.v3_bias = _as_tt(bias.expand(T, E).contiguous(), md, dtype=f32, mem=mem)  # full-width: no row broadcast
++        key = (id(md), E, K, tuple(self.c_buckets) if self.policy.moe_compact_max_users else (), mem is L1)
++        shared = _ROUTE_V3_CONSTS.get(key)
++        if shared is not None and shared["md"] is md:
++            self.__dict__.update({k: v for k, v in shared.items() if k != "md"})
++            return
++        for k in [k for k, v in _ROUTE_V3_CONSTS.items() if v["md"] is not md]:
++            del _ROUTE_V3_CONSTS[k]  # constants of a previous (closed) device
++        _as = lambda t, dtype=bf: _as_tt(t, md, dtype=dtype, mem=mem)
++        self.v3_eps = _as(torch.full((T, 1), 1e-6), f32)  # tensor eps: no scalar-op path
++        rep_k = torch.zeros(K, K * E)  # X = idx @ rep_k: X[r, k*E + e] = idx[r, k]
++        sum_k = torch.zeros(K * E, E)  # mask = OH @ sum_k: sum over the K one-hot blocks
++        for k in range(K):
++            rep_k[k, k * E : (k + 1) * E] = 1.0
++            sum_k[k * E : (k + 1) * E] = torch.eye(E)
++        self.v3_rep_k, self.v3_sum_k = _as(rep_k), _as(sum_k)
++        self.v3_cols = _as(torch.arange(E, dtype=torch.float32).repeat(K).expand(T, K * E).contiguous())
++        self.v3_ones_e = _as(torch.ones(1, E))  # active [T,1] @ ones -> full-width [T, E]
++        self.v3_ex = ttnn.init_device_compute_kernel_config(
++            md.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
++        )
++        # K*E-deep contractions: in0_block_w = all K tiles (default config: 1 tile/step, 5.2 vs 2.1 us)
++        kt = K * E // TILE
++        self.v3_deep_cfg = lambda n: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++            compute_with_storage_grid_size=ttnn.CoreCoord(-(-n // TILE), 1), in0_block_w=kt, out_subblock_h=1,
++            out_subblock_w=1, out_block_h=1, out_block_w=1, per_core_M=1, per_core_N=1, fuse_batch=True,
++            fused_activation=None, mcast_in0=True,
++        )
++        self.v3_rep_e, self.v3_pick, self.v3_pat = None, {}, {}
++        if self.policy.moe_compact_max_users:
++            rep_e = torch.zeros(E, K * E)  # dense @ rep_e: K copies of dense side by side
++            for k in range(K):
++                rep_e[:, k * E : (k + 1) * E] = torch.eye(E)
++            self.v3_rep_e = _as(rep_e)
++            for b in self.c_buckets:
++                pick = torch.zeros(K * E, b * K)  # P @ pick: column j*K + k sums block k (every user j)
++                pat = torch.zeros(T, b * K)  # pat[r, s] = 1 iff compact slot s belongs to row r (= user s // K)
++                for j in range(b):
++                    pat[j, j * K : (j + 1) * K] = 1.0
++                    for k in range(K):
++                        pick[k * E : (k + 1) * E, j * K + k] = 1.0
++                self.v3_pick[b] = _as(pick)
++                self.v3_pat[b] = _as(pat)
++        _ROUTE_V3_CONSTS[key] = {"md": md, **{k: v for k, v in self.__dict__.items() if k.startswith("v3_") and k != "v3_bias"}}
++
++    def _route_v3_select(self, x):
++        """-> (scores fp32 [T,E], topk indices [T,K], one-hot OH bf16 [T,K*E], mask fp32 [T,E]).
++        mask[r, e] = 1 iff e is one of row r's topk indices; identical to (biased >= k-th value)
++        except on exact fp32 ties of the k-th / (k+1)-th biased scores (where the threshold would
++        select more than K experts)."""
++        ex = self.v3_ex
++        scores = self._router_scores(x)
++        biased = ttnn.add(scores, self.v3_bias, memory_config=L1)
++        vals, idx = ttnn.topk(biased, k=self.K, dim=-1, memory_config=L1)
++        ttnn.deallocate(vals)
++        ttnn.deallocate(biased)
++        idx_f = ttnn.typecast(idx, ttnn.bfloat16, memory_config=L1)  # ids < 256 exact in bf16
++        X = ttnn.matmul(idx_f, self.v3_rep_k, compute_kernel_config=ex, memory_config=L1)
++        ttnn.deallocate(idx_f)
++        oh = ttnn.eq(X, self.v3_cols, memory_config=L1)
++        ttnn.deallocate(X)
++        mask = ttnn.matmul(
++            oh, self.v3_sum_k, compute_kernel_config=ex, program_config=self.v3_deep_cfg(self.E), dtype=ttnn.float32, memory_config=L1
++        )
++        return scores, idx, oh, mask
++
++    def _route_v3_dense(self, sel):
++        """bf16 [T,E] normalized weights from the selected scores, same fp32 math as
++        _route_tile_mask (sum, +eps, div; routed_scaling_factor 1.0)."""
++        ssum = ttnn.sum(sel, dim=-1, keepdim=True, memory_config=L1)
++        den = ttnn.add(ssum, self.v3_eps, memory_config=L1)
++        ttnn.deallocate(ssum)
++        dense = ttnn.div(sel, den, dtype=ttnn.bfloat16, memory_config=L1)  # == typecast(div) bitwise
++        ttnn.deallocate(den)
++        return dense
++
++    def _route_v3_wide(self, x, slot_active):
++        """64-wide decode routing [T,E] bf16 with idle rows (slot_active = 0) zeroed (NaN-safe)."""
++        scores, idx, oh, mask = self._route_v3_select(x)
++        ttnn.deallocate(idx)
++        ttnn.deallocate(oh)
++        sel = ttnn.multiply(scores, mask, memory_config=L1)  # == scores * (biased >= kth) bitwise
++        ttnn.deallocate(mask)
++        ttnn.deallocate(scores)
++        dense = self._route_v3_dense(sel)
++        ttnn.deallocate(sel)
++        if slot_active is not None and self.policy.mask_idle_routing:
++            act = ttnn.matmul(slot_active, self.v3_ones_e, compute_kernel_config=self.v3_ex, memory_config=L1)  # [T,E] 0/1
++            masked = ttnn.where(act, dense, 0.0, memory_config=L1)  # full width (no [T,1] broadcast), NaN-safe
++            ttnn.deallocate(act)
++            ttnn.deallocate(dense)
++            dense = masked
++        return dense
++
++    def _compact_route_v3(self, x, b):
++        """_compact_route for the bucket contract (only rows < b active): compact slot j*K + k =
++        row j's k-th topk expert; wc[r, j*K + k] = row r's weight of that expert iff r == j (rows
++        that are idle get their own garbage weights, which only reach their own, undefined, rows)."""
++        K, n = self.K, b * self.K
++        ex = self.v3_ex
++        scores, idx, oh, mask = self._route_v3_select(x)
++        ids = ttnn.untilize_with_unpadding(idx, output_tensor_end=(0, 0, b - 1, K - 1), memory_config=L1)  # [b, K]
++        ttnn.deallocate(idx)
++        if b > 1:
++            ids = ttnn.reshape(ids, (1, 1, 1, n))  # row-major [b, K] -> [1, b*K] (uint16 reshape unsupported)
++        ids_u16 = ttnn.typecast(ids, ttnn.uint16, memory_config=L1)
++        ttnn.deallocate(ids)
++        sel = ttnn.multiply(scores, mask, memory_config=L1)  # == scores * (biased >= kth) bitwise
++        ttnn.deallocate(scores)
++        ttnn.deallocate(mask)
++        dense = self._route_v3_dense(sel)
++        ttnn.deallocate(sel)
++        drep = ttnn.matmul(dense, self.v3_rep_e, compute_kernel_config=ex, memory_config=L1)  # exact copies
++        ttnn.deallocate(dense)
++        p = ttnn.multiply(oh, drep, memory_config=L1)  # one nonzero (the selected weight) per K-block
++        ttnn.deallocate(oh)
++        ttnn.deallocate(drep)
++        wc = ttnn.matmul(p, self.v3_pick[b], compute_kernel_config=ex, program_config=self.v3_deep_cfg(n), memory_config=L1)
++        ttnn.deallocate(p)
++        if b > 1:
++            wcm = ttnn.multiply(wc, self.v3_pat[b], memory_config=L1)
++            ttnn.deallocate(wc)
++            wc = wcm
++        return ids_u16, wc
++
+     def _compact_forward(self, x, slot_active, b):
+         T, I, H, K = x.shape[-2], self.I, self.H, self.K
+         n = b * K
+         p = self.policy
+-        ids, wc = self._compact_route(x, slot_active, b)
++        if p.moe_route_v3 and T == TILE:
++            ids, wc = self._compact_route_v3(x, b)
++        else:
++            ids, wc = self._compact_route(x, slot_active, b)
+         x = ttnn.reshape(x, (1, 1, T, H))
+         kw = dict(
+             sparsity=self.c_sparsity,
+@@ -1107,7 +1280,11 @@
+             return out
+         if T > TILE:
+             return super().forward(x)
+-        routing = self.route(x)
++        if p.moe_route_v3 and T == TILE:
++            routing = self._route_v3_wide(x, slot_active)  # idle rows already zeroed
++            slot_active = None
++        else:
++            routing = self.route(x)
+         if slot_active is not None and self.policy.mask_idle_routing:
+             # idle decode slots carry garbage rows: drop their expert selections so the union
+             # sparsity (and so the weights read) only covers active users

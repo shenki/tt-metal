@@ -1,0 +1,3 @@
+base bucket=1 policy={} batch=1
+generated/profiler/reports/2026_10_16_22_36_09/ops_perf_results_2026_10_16_22_36_09.csv
+c23b7749391f29d3995d31d2599717c2  models/autoports/lfm2_r3_attn/tt/optimized_decoder.py

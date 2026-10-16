@@ -1,0 +1,2 @@
+P_l1plus policy={"ds_dense_w13":[32,2,3],"ds_dense_w2":[8,16,2],"dense_w13":"bfp4","dense_w2":"bfp4","dense_fidelity":"lofi","conv_in":"bfp4","ds_conv_in":[16,4,3]} batch=32
+generated/r2_bfp4_tracy_333525/reports/2026_10_16_19_48_12/ops_perf_results_2026_10_16_19_48_12.csv

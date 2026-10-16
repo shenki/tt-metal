@@ -1,0 +1,3 @@
+dense2d_l1aware base=default policy={"dense_prefill_2d":true} batch=1
+generated/profiler/reports/2026_10_15_23_23_47/ops_perf_results_2026_10_15_23_23_47.csv
+fee73388

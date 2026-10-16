@@ -1,0 +1,11 @@
+kind         b bucket  MB/step roofline us device us dev/roof host e2e us host-dev
+attn_moe     1 False      54.6       106.6    1052.1     9.87      1070.3     18.2
+attn_moe     1 True       54.6       106.6     348.3     3.27       370.6     22.3
+attn_moe     4 True      181.7       354.8     742.9     2.09       761.2     18.3
+attn_moe    32 False     645.0      1259.7    1991.9     1.58      2021.0     29.1
+conv_dense   1 False      98.0       191.5     310.5     1.62       326.4     15.9
+conv_dense  32 False      98.0       191.5     310.4     1.62       326.5     16.1
+conv_moe     1 False      59.0       115.2     497.4     4.32       510.4     13.0
+conv_moe     1 True       59.0       115.2     299.7     2.60       327.6     27.9
+conv_moe     4 True      179.3       350.2     664.0     1.90       692.1     28.1
+conv_moe    32 False     579.2      1131.3    1567.1     1.39      1584.0     16.9

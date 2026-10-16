@@ -1,0 +1,2 @@
+P_all policy={"ds_dense_w13":[32,2,3],"ds_dense_w2":[48,8,2]} batch=1
+generated/r2_bfp4_tracy_305309/reports/2026_10_16_19_41_28/ops_perf_results_2026_10_16_19_41_28.csv

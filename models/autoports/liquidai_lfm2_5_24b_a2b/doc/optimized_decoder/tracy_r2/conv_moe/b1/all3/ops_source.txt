@@ -1,0 +1,3 @@
+all3 base=default policy={"router_ds_cores":8,"router_kth_slice":true,"decode_residual_l1":true} batch=1
+generated/profiler/reports/2026_10_16_19_31_46/ops_perf_results_2026_10_16_19_31_46.csv
+fee73388

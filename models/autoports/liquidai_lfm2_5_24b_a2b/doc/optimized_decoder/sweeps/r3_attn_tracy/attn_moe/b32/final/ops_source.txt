@@ -1,0 +1,3 @@
+final bucket=1 policy={"attn_heads_sharded":true,"attn_kv_fused_max_bucket":32,"attn_pad_free":true,"attn_bucket_heads":true,"attn_residual_sharded":true} batch=32
+generated/profiler/reports/2026_10_16_23_21_33/ops_perf_results_2026_10_16_23_21_33.csv
+fdfa633402ffecef001ee8f7627a8bdd  models/autoports/lfm2_r3_attn/tt/optimized_decoder.py

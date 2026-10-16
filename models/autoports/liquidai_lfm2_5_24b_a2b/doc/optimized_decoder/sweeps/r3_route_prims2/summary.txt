@@ -1,0 +1,60 @@
+mm S hifi4 fp32acc#R5#D                                      ops/rep   1  device    5.22 us  gaps   2.73 us  total    7.94
+    MatmulDeviceOperation              cores   2   5.22 us gap 83.10  in0 32[32]x256[256] BFLOAT16 in1 256[256]x64[64]
+mm S lofi#R5#D                                               ops/rep   1  device    5.19 us  gaps   2.72 us  total    7.92
+    MatmulDeviceOperation              cores   2   5.19 us gap 57.16  in0 32[32]x256[256] BFLOAT16 in1 256[256]x64[64]
+mm R lofi#R5#D                                               ops/rep   1  device    1.99 us  gaps   2.94 us  total    4.93
+    MatmulDeviceOperation              cores   8   1.99 us gap 54.43  in0 32[32]x32[4] BFLOAT16 in1 32[4]x256[256]
+mm R hifi2#R5#D                                              ops/rep   1  device    2.01 us  gaps   2.94 us  total    4.94
+    MatmulDeviceOperation              cores   8   2.01 us gap 52.59  in0 32[32]x32[4] BFLOAT16 in1 32[4]x256[256]
+transpose scores fp32#R5#D                                   ops/rep   1  device    1.00 us  gaps   5.75 us  total    6.75
+    TransposeDeviceOperation           cores   2   1.00 us gap 73.98  in0 32[32]x64[64] FLOAT32 in1 nanxnan
+transpose idx_f bf16#R5#D                                    ops/rep   1  device    0.57 us  gaps   3.69 us  total    4.26
+    TransposeDeviceOperation           cores   1   0.57 us gap 73.38  in0 32[32]x32[4] BFLOAT16 in1 nanxnan
+transpose active bf16#R5#D                                   ops/rep   1  device    0.57 us  gaps   2.97 us  total    3.54
+    TransposeDeviceOperation           cores   1   0.57 us gap 66.27  in0 32[32]x32[1] BFLOAT16 in1 nanxnan
+typecast idx->bf16#R5#D                                      ops/rep   1  device    0.71 us  gaps   3.11 us  total    3.82
+    TypecastDeviceOperation            cores   1   0.71 us gap 121.46  in0 32[32]x32[4] UINT32 in1 nanxnan
+sum dim-2 selT#R5#D                                          ops/rep   1  device    1.64 us  gaps   2.79 us  total    4.43
+    ReduceDeviceOperation              cores   1   1.64 us gap 76.26  in0 64[64]x32[32] FLOAT32 in1 nanxnan
+div row-bcast selT/denT#R5#D                                 ops/rep   1  device    3.06 us  gaps   5.76 us  total    8.82
+    BinaryNgDeviceOperation            cores 110   3.06 us gap 57.06  in0 64[64]x32[32] FLOAT32 in1 32[1]x32[32]
+div row-bcast out bf16#R5#D                                  ops/rep   1  device    3.29 us  gaps   5.81 us  total    9.10
+    BinaryNgDeviceOperation            cores 110   3.29 us gap 82.54  in0 64[64]x32[32] FLOAT32 in1 32[1]x32[32]
+mul row-bcast maskT x activeT#R5#D                           ops/rep   1  device    7.21 us  gaps   5.81 us  total   13.02
+    BinaryNgDeviceOperation            cores 110   7.21 us gap 70.45  in0 64[64]x32[32] FLOAT32 in1 32[1]x32[32]
+mm R^T @ idx_fT#R5#D                                         ops/rep   1  device    2.03 us  gaps   2.94 us  total    4.97
+    MatmulDeviceOperation              cores   8   2.03 us gap 46.80  in0 256[256]x32[4] BFLOAT16 in1 32[4]x32[32]
+eq CT#R5#D                                                   ops/rep   1  device    1.94 us  gaps   5.84 us  total    7.78
+    BinaryNgDeviceOperation            cores 110   1.94 us gap 54.03  in0 32[32]x256[256] BFLOAT16 in1 32[32]x256[256]
+mm S^T @ OHT lofi#R5#D                                       ops/rep   1  device    5.16 us  gaps   2.73 us  total    7.90
+    MatmulDeviceOperation              cores   2   5.16 us gap 53.54  in0 64[64]x256[256] BFLOAT16 in1 256[256]x32[32]
+permute wc [1;1;T;n]->[1;n;T;1]#R5#D                         ops/rep   1  device    1.67 us  gaps   4.63 us  total    6.30
+    PermuteDeviceOperation             cores  32   1.67 us gap 52.71  in0 32[32]x32[4] BFLOAT16 in1 nanxnan
+permute wcT [1;1;n;T]->[1;n;T;1]#R5#D                        ops/rep   1  device    4.45 us  gaps   2.85 us  total    7.30
+    PermuteDeviceOperation             cores   4   4.45 us gap 78.24  in0 32[4]x32[32] BFLOAT16 in1 nanxnan
+permute routing [1;1;T;E]->[1;E;T;1]#R5#D                    ops/rep   1  device    4.95 us  gaps   5.58 us  total   10.54
+    PermuteDeviceOperation             cores  64   4.95 us gap 76.81  in0 32[32]x64[64] BFLOAT16 in1 nanxnan
+permute routingT [1;1;E;T]->[1;E;T;1]#R5#D                   ops/rep   1  device    4.85 us  gaps   5.48 us  total   10.33
+    PermuteDeviceOperation             cores  64   4.85 us gap 69.24  in0 64[64]x32[32] BFLOAT16 in1 nanxnan
+reshape routingT -> [1;E;T;1]#R5#D                           ops/rep   1  device    4.25 us  gaps   5.17 us  total    9.42
+    ReshapeViewDeviceOperation         cores  64   4.25 us gap 70.00  in0 64[64]x32[32] BFLOAT16 in1 nanxnan
+max dim2 + to RM (current sparsity)#R5#D                     ops/rep   2  device    2.05 us  gaps   3.95 us  total    6.00
+    ReduceDeviceOperation              cores   2   1.05 us gap 49.59  in0 32[32]x64[64] BFLOAT16 in1 nanxnan
+    UntilizeWithUnpaddingDeviceOperati cores   1   1.00 us gap  1.16  in0 32[1]x64[64] BFLOAT16 in1 nanxnan
+max dim-1 on routingT + to RM#R5#D                           ops/rep   2  device   10.27 us  gaps   3.89 us  total   14.16
+    ReduceDeviceOperation              cores   2   1.09 us gap 61.99  in0 64[64]x32[32] BFLOAT16 in1 nanxnan
+    UntilizeWithUnpaddingDeviceOperati cores   2   9.18 us gap  1.16  in0 64[64]x32[1] BFLOAT16 in1 nanxnan
+where bcast [T;1] cur (routing bf16)#R5#D                    ops/rep   1  device    5.66 us  gaps   5.81 us  total   11.46
+    BinaryNgDeviceOperation            cores 110   5.66 us gap 64.54  in0 32[32]x32[1] BFLOAT16 in1 32[32]x64[64]
+mm dense @ Rep lofi#R5#D                                     ops/rep   1  device    1.80 us  gaps   2.93 us  total    4.74
+    MatmulDeviceOperation              cores   8   1.80 us gap 60.30  in0 32[32]x64[64] BFLOAT16 in1 64[64]x256[256]
+mm dense @ Rep hifi4#R5#D                                    ops/rep   1  device    1.85 us  gaps   2.91 us  total    4.76
+    MatmulDeviceOperation              cores   8   1.85 us gap 70.70  in0 32[32]x64[64] BFLOAT16 in1 64[64]x256[256]
+mul OH x denseRep#R5#D                                       ops/rep   1  device    2.08 us  gaps   5.81 us  total    7.90
+    BinaryNgDeviceOperation            cores 110   2.08 us gap 71.83  in0 32[32]x256[256] BFLOAT16 in1 32[32]x256[256]
+mm P @ S' hifi4#R5#D                                         ops/rep   1  device    5.12 us  gaps   2.80 us  total    7.93
+    MatmulDeviceOperation              cores   1   5.12 us gap 54.59  in0 32[32]x256[256] BFLOAT16 in1 256[256]x32[4]
+mm P @ S' lofi#R5#D                                          ops/rep   1  device    5.10 us  gaps   2.81 us  total    7.91
+    MatmulDeviceOperation              cores   1   5.10 us gap 54.75  in0 32[32]x256[256] BFLOAT16 in1 256[256]x32[4]
+mm dense @ onehot (cur)#R5#D                                 ops/rep   1  device    1.42 us  gaps   2.80 us  total    4.23
+    MatmulDeviceOperation              cores   1   1.42 us gap 40.01  in0 32[32]x64[64] BFLOAT16 in1 64[64]x32[4]

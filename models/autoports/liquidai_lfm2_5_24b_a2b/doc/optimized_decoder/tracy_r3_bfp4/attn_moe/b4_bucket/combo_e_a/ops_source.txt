@@ -1,0 +1,3 @@
+combo_e_a policy={"expert_gate_up_decode": "bfp4", "expert_fidelity": "lofi", "attn_fidelity": "lofi"} batch=4 bucket=1
+generated/profiler/reports/2026_10_16_22_56_40/ops_perf_results_2026_10_16_22_56_40.csv mtime=2026-10-16 22:56:42.189715310 +1030
+a97b93473832e289 (sha256 of lfm2_r3_bfp4 tt/*.py + bench files)

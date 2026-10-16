@@ -1,0 +1,3 @@
+router_f23a8f base=default policy={"router_bf16":true} batch=1
+generated/profiler/reports/2026_10_15_23_36_31/ops_perf_results_2026_10_15_23_36_31.csv
+fee73388

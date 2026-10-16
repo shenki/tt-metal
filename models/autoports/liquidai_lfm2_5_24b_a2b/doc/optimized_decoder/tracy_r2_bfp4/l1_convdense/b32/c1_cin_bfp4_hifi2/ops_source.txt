@@ -1,0 +1,2 @@
+c1_cin_bfp4_hifi2 policy={"conv_in":"bfp4","ds_conv_in":[16,4,3]} batch=32
+generated/r2_bfp4_tracy_319315/reports/2026_10_16_19_44_34/ops_perf_results_2026_10_16_19_44_34.csv

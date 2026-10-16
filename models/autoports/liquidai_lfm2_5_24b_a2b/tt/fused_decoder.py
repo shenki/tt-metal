@@ -99,7 +99,8 @@ def _ones_row(mesh_device, n):
 def _project(inp, w, residual, ones, ckc, fold):
     """``inp @ w`` (+ ``residual``): one fused minimal-matmul+addcmul when ``fold`` and the input
     has more than one tile of rows (prefill; measured slower than linear + add for decode M=32)."""
-    if fold and residual is not None and inp.shape[-2] > TILE:
+    # the fused addcmul requires the weight tile size to match the residual's (bf16 weights only)
+    if fold and residual is not None and inp.shape[-2] > TILE and w.dtype == residual.dtype:
         return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
             inp, w, 1.0, residual, ones, compute_kernel_config=ckc, memory_config=DRAM, dtype=ttnn.bfloat16
         )
@@ -128,14 +129,22 @@ class FusedRope(RopeSetup):
     def __init__(self, mesh_device, args: Lfm2MoeArgs, max_seq_len=None, batch=TILE):
         super().__init__(mesh_device, args, max_seq_len=max_seq_len)
         self.head_mem = decode_head_mem(mesh_device, batch, self.head_dim)
+        self._bucket_head_mems = {}
 
-    def decode_cos_sin(self, rope_pos):
-        """``rope_pos`` uint32 ``[1, B]`` -> sharded cos/sin ``[1, B, 1, hd]``."""
+    def decode_cos_sin(self, rope_pos, batch=None):
+        """``rope_pos`` uint32 ``[1, B]`` -> sharded cos/sin ``[1, B, 1, hd]``; ``batch`` < B: users
+        0..batch-1 only (``[1, batch, 1, hd]`` on ``batch`` cores, for bucketed decode)."""
+        head_mem, pos = self.head_mem, rope_pos
+        if batch is not None and batch < rope_pos.shape[-1]:
+            head_mem = self._bucket_head_mems.setdefault(batch, decode_head_mem(self.mesh_device, batch, self.head_dim))
+            pos = ttnn.slice(rope_pos, (0, 0), (1, batch))
         out = []
         for table in (self.cos_rm, self.sin_rm):
-            t = ttnn.embedding(rope_pos, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, B, hd]
+            t = ttnn.embedding(pos, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, B, hd]
             t = ttnn.transpose(ttnn.unsqueeze_to_4D(t), 1, 2)  # [1, B, 1, hd]
-            out.append(ttnn.interleaved_to_sharded(t, self.head_mem))
+            out.append(ttnn.interleaved_to_sharded(t, head_mem))
+        if pos is not rope_pos:
+            ttnn.deallocate(pos)
         return out
 
     def apply_hf(self, x, cos, sin, decode, ckc):
@@ -164,6 +173,12 @@ class FusedAttention(Attention):
         # nlp_concat_heads_decode needs a rectangular B-core grid (rejects the row-major set above)
         self.concat_in_mem = _height_shard(ttnn.CoreGrid(y=self.B // 8, x=8), (TILE, self.HD))
 
+    def _qkv_linear(self, x, mem):
+        return ttnn.linear(x, self.wqkv, compute_kernel_config=self.ckc, memory_config=mem)
+
+    def _out_project(self, attn, residual):
+        return _project(attn, self.wo, residual, self.ones_h, self.ckc, self.fold)
+
     def _qk_norm_f(self, t, which, mem):
         if "qk_norm_weight" in self.f:
             w = self.q_norm_rm if which == "q" else self.k_norm_rm
@@ -182,7 +197,7 @@ class FusedAttention(Attention):
             f"chunk_start {chunk_start} must be a multiple of the KV block size {block_size} "
             f"(paged_fill_cache writes from block chunk_start // block_size); S_pad {S} a multiple of {TILE}"
         )
-        qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.ckc, memory_config=DRAM)
+        qkv = self._qkv_linear(x, DRAM)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=self.NH, num_kv_heads=self.NKV, transpose_k_heads=False, memory_config=DRAM
         )
@@ -215,7 +230,7 @@ class FusedAttention(Attention):
         )
         ttnn.deallocate(q)
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=DRAM)
-        out = _project(attn, self.wo, residual, self.ones_h, self.ckc, self.fold)
+        out = self._out_project(attn, residual)
         ttnn.deallocate(attn)
         return out
 
@@ -224,7 +239,7 @@ class FusedAttention(Attention):
             assert "rope_hf" not in self.f, "rope_hf decode needs the sharded heads of qkv_heads_decode"
             return self._decode_unfused_heads(x, rope_cos, rope_sin, rope, cur_pos, page_table, residual)
         B, NH, HD = x.shape[-2], self.NH, self.HD
-        qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.ckc, memory_config=L1)
+        qkv = self._qkv_linear(x, L1)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv, num_heads=NH, num_kv_heads=self.NKV, memory_config=self.head_mem
         )  # [1, B, 32(pad), HD] height-sharded, one user per core
@@ -280,13 +295,13 @@ class FusedAttention(Attention):
             attn = attn_i
         else:
             attn = ttnn.reshape(attn, (1, 1, B, self.NH * self.HD))
-        out = _project(attn, self.wo, residual, self.ones_h, self.ckc, self.fold)
+        out = self._out_project(attn, residual)
         ttnn.deallocate(attn)
         return out
 
     def _decode_unfused_heads(self, x, rope_cos, rope_sin, rope, cur_pos, page_table, residual=None):
         B, NH, NKV, HD = x.shape[-2], self.NH, self.NKV, self.HD
-        qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.ckc, memory_config=L1)
+        qkv = self._qkv_linear(x, L1)
         q = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, B, NH * HD)), (1, B, NH, HD))
         k = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, NH * HD), (1, 1, B, (NH + NKV) * HD)), (1, B, NKV, HD))
         v = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, (NH + NKV) * HD), (1, 1, B, (NH + 2 * NKV) * HD)), (1, B, NKV, HD))
@@ -327,6 +342,9 @@ class FusedShortConv(ShortConv):
         c = ttnn.linear(x, self.in_c, compute_kernel_config=self.ckc, memory_config=mem)
         return bx, c
 
+    def _out_project(self, y, residual):
+        return _project(y, self.out_proj, residual, self.ones_h, self.ckc, self.fold)
+
     def prefill_forward(self, x, inputs, residual=None):
         """``ShortConv.prefill_forward`` with an optional residual added by the out projection."""
         S = x.shape[-2]
@@ -353,17 +371,23 @@ class FusedShortConv(ShortConv):
             ttnn.deallocate(shifted)
         if not tile_shift:
             ttnn.deallocate(ext_rm)
+        tail_src = ext
+        if inputs.tail_window is not None:  # selection over a <= 64-row window instead of all 32 + S rows
+            ws, we = inputs.tail_window
+            tail_src = ttnn.slice(ext, (0, 0, ws, 0), (1, 1, we, H))
         for j, sel in enumerate((inputs.tail_sel_0, inputs.tail_sel_1)):
-            row = ttnn.matmul(sel, ext, compute_kernel_config=self.ckc)
+            row = ttnn.matmul(sel, tail_src, compute_kernel_config=self.ckc)
             new_state = ttnn.mac(self.state[j], inputs.keep_mask, row)
             ttnn.copy(new_state, self.state[j])
             ttnn.deallocate(row)
             ttnn.deallocate(new_state)
+        if tail_src is not ext:
+            ttnn.deallocate(tail_src)
         ttnn.deallocate(ext)
         y = ttnn.multiply(c, conv)
         ttnn.deallocate(c)
         ttnn.deallocate(conv)
-        out = _project(y, self.out_proj, residual, self.ones_h, self.ckc, self.fold)
+        out = self._out_project(y, residual)
         ttnn.deallocate(y)
         return out
 
@@ -387,7 +411,7 @@ class FusedShortConv(ShortConv):
         y = ttnn.multiply(c, conv, memory_config=L1)
         ttnn.deallocate(c)
         ttnn.deallocate(conv)
-        out = _project(y, self.out_proj, residual, self.ones_h, self.ckc, self.fold)
+        out = self._out_project(y, residual)
         ttnn.deallocate(y)
         return out
 
@@ -411,6 +435,9 @@ class FusedDenseMLP(DenseMLP):
             self.w1 = _as_tt(w1, mesh_device, dtype=dtype)
             self.w3 = _as_tt(w3, mesh_device, dtype=dtype)
         self.w2 = _as_tt(sd["feed_forward.w2.weight"].T, mesh_device, dtype=dtype)
+
+    def _down_project(self, h, residual):
+        return _project(h, self.w2, residual, self.ones_h, self.ckc, self.fold)
 
     def forward(self, x, residual=None):
         T = x.shape[-2]
@@ -437,7 +464,7 @@ class FusedDenseMLP(DenseMLP):
             h = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=DRAM)
             ttnn.deallocate(g)
             ttnn.deallocate(u)
-        out = _project(h, self.w2, residual, self.ones_h, self.ckc, self.fold)
+        out = self._down_project(h, residual)
         ttnn.deallocate(h)
         return out
 
@@ -510,13 +537,12 @@ class FusedMoE(MoE):
         ttnn.deallocate(idx)
         return ttnn.typecast(ttnn.to_layout(dense, ttnn.TILE_LAYOUT), ttnn.bfloat16)
 
-    def _route_tile_mask(self, x):
-        """Dense routing without gather/scatter or layout changes: the selected experts are those
-        whose biased score is >= the k-th largest biased score (``topk`` values), identical to the
-        top-k index set except on exact fp32 ties of the k-th and (k+1)-th biased scores, where
-        more than k experts would be selected (all renormalized).  HF's ``torch.topk`` breaks such
-        ties arbitrarily, so neither choice is canonical; not observed on 2x512 real tokens
-        (doc/fused_decoder/logs/router_selection_probe.log)."""
+    def _mm_cfg(self, role, rows, n, groups):
+        """Program config hook per sparse-matmul role ("gate_up", "down", "down_prefill")."""
+        return _sparse_matmul_config(rows, n)
+
+    def _router_scores(self, x):
+        """fp32 sigmoid router scores [.., T, E]."""
         xf = ttnn.typecast(x, ttnn.float32)
         if "router_fold" in self.f:
             scores = ttnn.linear(
@@ -527,6 +553,16 @@ class FusedMoE(MoE):
                 ttnn.linear(xf, self.router, compute_kernel_config=self.ckc_router, dtype=ttnn.float32)
             )
         ttnn.deallocate(xf)
+        return scores
+
+    def _route_tile_mask(self, x):
+        """Dense routing without gather/scatter or layout changes: the selected experts are those
+        whose biased score is >= the k-th largest biased score (``topk`` values), identical to the
+        top-k index set except on exact fp32 ties of the k-th and (k+1)-th biased scores, where
+        more than k experts would be selected (all renormalized).  HF's ``torch.topk`` breaks such
+        ties arbitrarily, so neither choice is canonical; not observed on 2x512 real tokens
+        (doc/fused_decoder/logs/router_selection_probe.log)."""
+        scores = self._router_scores(x)
         biased = ttnn.add(scores, self.bias)
         vals, idx = ttnn.topk(biased, k=self.K, dim=-1)
         ttnn.deallocate(idx)
@@ -609,7 +645,7 @@ class FusedMoE(MoE):
             nnz=None,
             memory_config=DRAM,
             output_tile=ttnn.Tile([32, 32]),
-            program_config=_sparse_matmul_config(rows_per_group, 2 * I),
+            program_config=self._mm_cfg("gate_up", rows_per_group, 2 * I, groups),
             compute_kernel_config=self.ckc,
             dtype=ttnn.bfloat16,
         )  # [1, G, 1, E, R, 2I]
@@ -651,7 +687,7 @@ class FusedMoE(MoE):
             nnz=nnz,
             memory_config=DRAM,
             output_tile=ttnn.Tile([32, 32]),
-            program_config=_sparse_matmul_config(T, H),
+            program_config=self._mm_cfg("down", T, H, 1),
             compute_kernel_config=self.ckc,
             is_input_a_sparse=True,
             dtype=ttnn.bfloat16,
@@ -676,7 +712,7 @@ def _down_prefill_sparse_impl(self, act, routing, tile_mask, R, G):
         nnz=None,
         memory_config=DRAM,
         output_tile=ttnn.Tile([32, 32]),
-        program_config=_sparse_matmul_config(R, H),
+        program_config=self._mm_cfg("down_prefill", R, H, G),
         compute_kernel_config=self.ckc,
         is_input_a_sparse=True,
         is_input_b_sparse=False,

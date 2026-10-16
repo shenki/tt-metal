@@ -1,0 +1,2 @@
+d4_dense_bfp4_lofi policy={"ds_dense_w13":[32,2,3],"ds_dense_w2":[8,16,2],"dense_w13":"bfp4","dense_w2":"bfp4","dense_fidelity":"lofi"} batch=32
+generated/r2_bfp4_tracy_318318/reports/2026_10_16_19_44_16/ops_perf_results_2026_10_16_19_44_16.csv

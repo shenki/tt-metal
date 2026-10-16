@@ -1,0 +1,357 @@
+--- a/tt/optimized_decoder.py
++++ b/tt/optimized_decoder.py
+@@ -95,6 +95,12 @@
+     moe_dispatch_min_rows: int = 0
+     moe_dispatch_max_rows: int = 2048  # static constants are sized for chunks up to this many rows
+     ffn_norm_cores: int = 8
++    # decode MoE for a static small active-user bucket (active_slots <= this; 0 = off): the
++    # bucket*K selected experts are computed compactly with sparse_matmul indexed (gather) mode
++    # instead of the 64-expert-wide path; requires at most active_slots active slots
++    moe_compact_max_users: int = 0
++    moe_gate_up_compact_cfg: tuple = None  # (grid_x, grid_y, in0_block_w, out_subblock_w); None = moe_gate_up_cfg
++    moe_down_compact_cfg: tuple = None  # None = moe_down_cfg
+
+     def summary(self):
+         return {k: getattr(self, k) for k in self.__dataclass_fields__}
+@@ -414,6 +420,25 @@
+         return _add_residual(self.ds_w2(h, self.ckc, DRAM), residual)
+
+
++def _mcast_1d_config(cfg, rows, n):
++    """sparse_matmul 1D in0-mcast config from a policy tuple (grid_x, grid_y, in0_block_w, out_subblock_w)."""
++    gx, gy, in0_bw, sub_w = cfg
++    per_core_n = -(-(n // TILE) // (gx * gy))
++    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
++        in0_block_w=in0_bw,
++        out_subblock_h=1,
++        out_subblock_w=sub_w,
++        out_block_h=1,
++        out_block_w=per_core_n,
++        per_core_M=rows // TILE,
++        per_core_N=per_core_n,
++        fuse_batch=False,
++        fused_activation=None,
++        mcast_in0=True,
++    )
++
++
+ class OptimizedMoE(FusedMoE):
+     def __init__(self, mesh_device, args, sd, policy: Policy, fusions):
+         super().__init__(mesh_device, args, sd, DTYPES[policy.expert_gate_up], fusions)
+@@ -438,6 +463,8 @@
+             ks = policy.router_ksplit
+             wr = sd["feed_forward.gate.weight"].T  # [H, E]
+             self.router_split = _as_tt(wr.reshape(ks, self.H // ks, self.E).unsqueeze(0), mesh_device, dtype=ttnn.bfloat16)
++        if policy.moe_compact_max_users:
++            self._init_compact()
+
+     def _router_scores(self, x):
+         if not self.policy.router_bf16:
+@@ -602,22 +629,130 @@
+         }[(role, groups == 1 and rows <= TILE)]
+         if cfg is None:
+             return super()._mm_cfg(role, rows, n, groups)
+-        gx, gy, in0_bw, sub_w = cfg
+-        n_tiles = n // TILE
+-        per_core_n = -(-n_tiles // (gx * gy))
+-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+-            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+-            in0_block_w=in0_bw,
+-            out_subblock_h=1,
+-            out_subblock_w=sub_w,
+-            out_block_h=1,
+-            out_block_w=per_core_n,
+-            per_core_M=rows // TILE,
+-            per_core_N=per_core_n,
+-            fuse_batch=False,
+-            fused_activation=None,
+-            mcast_in0=True,
++        return _mcast_1d_config(cfg, rows, n)
++
++    # ---------------- decode: compact (indexed) experts for a small active-user bucket ----------------
++    def _init_compact(self):
++        """Constants of the compact decode path for buckets 1, 2, 4, .. <= moe_compact_max_users."""
++        import torch
++
++        from .functional_decoder import _as_tt
++
++        md, K, T = self.mesh_device, self.K, TILE
++        self.c_buckets = [1 << i for i in range(8) if (1 << i) <= self.policy.moe_compact_max_users]
++        assert self.c_buckets[-1] * K <= self.E, "bucket * top_k must not exceed the expert count"
++        # sparsity is a required operand of sparse_matmul but is not read in indexed mode
++        self.c_sparsity = _as_tt(torch.ones(1, 1, 1, self.E), md, layout=ttnn.ROW_MAJOR_LAYOUT)
++        self.c_tril = _as_tt(torch.tril(torch.ones(T, T)), md)  # inclusive prefix count of active slots
++        self.c_arange_e = _as_tt(torch.arange(self.E, dtype=torch.float32).reshape(self.E, 1), md)
++        self.c_rank, self.c_rep, self.c_tilek = {}, {}, {}
++        for b in self.c_buckets[1:]:
++            self.c_rank[b] = _as_tt(torch.arange(1, b + 1, dtype=torch.float32).reshape(1, b), md, dtype=ttnn.float32)
++            rep = torch.zeros(b, b * K)  # [b, b*K]: user j -> its K compact slots
++            tilek = torch.zeros(K, b * K)  # [K, b*K]: k-th choice -> slot j*K + k of every user j
++            for j in range(b):
++                rep[j, j * K : (j + 1) * K] = 1.0
++                tilek[:, j * K : (j + 1) * K] = torch.eye(K)
++            self.c_rep[b], self.c_tilek[b] = _as_tt(rep, md), _as_tt(tilek, md)
++        self.c_exact_ckc = ttnn.init_device_compute_kernel_config(
++            md.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
++        )
++
++    def _compact_route(self, x, slot_active, b):
++        """Decode routing for <= b active slots -> (ids uint16 ROW_MAJOR [1,1,1,b*K]: the experts
++        selected by the active slots, slot j's K choices at compact slots j*K..j*K+K-1 (duplicates
++        allowed); wc bf16 [1,1,T,b*K]: wc[r, s] = routing weight of row r for compact slot s, zero
++        unless s belongs to row r).  Same selection/weights as the 64-wide path (``_route_tile_mask``);
++        ids and weights come from exact 0/1 / small-integer matmuls (no gather, no host reads)."""
++        K, n = self.K, b * self.K
++        scores = self._router_scores(x)
++        biased = ttnn.add(scores, self.bias)
++        vals, idx = ttnn.topk(biased, k=K, dim=-1)
++        kth = ttnn.min(vals, dim=-1, keepdim=True)
++        ttnn.deallocate(vals)
++        sel = ttnn.multiply(scores, ttnn.ge(biased, kth))
++        ttnn.deallocate(biased)
++        ttnn.deallocate(kth)
++        ttnn.deallocate(scores)
++        dense = ttnn.div(sel, ttnn.add(ttnn.sum(sel, dim=-1, keepdim=True), 1e-6))
++        ttnn.deallocate(sel)
++        if self.scale != 1.0:
++            dense = ttnn.multiply(dense, self.scale)
++        dense = ttnn.typecast(dense, ttnn.bfloat16)  # [1,1,T,E], as the 64-wide path
++        idx_f = ttnn.typecast(idx, ttnn.bfloat16)  # expert ids < 256 are exact in bf16
++        ttnn.deallocate(idx)
++        ex = self.c_exact_ckc
++        if b == 1:
++            own = slot_active  # [T, 1]: the single compact user is the active row
++            ids = ttnn.matmul(slot_active, idx_f, transpose_a=True, compute_kernel_config=ex)
++        else:
++            # st[r, j] = 1 iff row r is the j-th active slot; own[r, s] = st[r, s // K]
++            cnt = ttnn.matmul(self.c_tril, slot_active, compute_kernel_config=ex, dtype=ttnn.float32)
++            st = ttnn.typecast(ttnn.multiply(ttnn.eq(cnt, self.c_rank[b]), ttnn.typecast(slot_active, ttnn.float32)), ttnn.bfloat16)
++            ttnn.deallocate(cnt)
++            own = ttnn.matmul(st, self.c_rep[b], compute_kernel_config=ex)
++            ttnn.deallocate(st)
++            idk = ttnn.matmul(idx_f, self.c_tilek[b], compute_kernel_config=ex)  # [T, n]: idx[r, s % K]
++            sel_ids = ttnn.multiply(idk, own)
++            ttnn.deallocate(idk)
++            ids = ttnn.matmul(slot_active, sel_ids, transpose_a=True, compute_kernel_config=ex)
++            ttnn.deallocate(sel_ids)
++        ttnn.deallocate(idx_f)
++        onehot = ttnn.eq(self.c_arange_e, ids)  # [E, n] bf16 (ids < 256 are exact in bf16)
++        wsel = ttnn.matmul(dense, onehot, compute_kernel_config=ex)  # [T, n]: dense[r, ids[s]]
++        ttnn.deallocate(onehot)
++        ttnn.deallocate(dense)
++        wc = ttnn.where(own, wsel, 0.0)  # NaN-safe: idle rows are undefined
++        ttnn.deallocate(wsel)
++        if b != 1:
++            ttnn.deallocate(own)
++        ids_u = ttnn.to_layout(ttnn.typecast(ids, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
++        ttnn.deallocate(ids)
++        ids_u16 = ttnn.typecast(ids_u, ttnn.uint16)
++        ttnn.deallocate(ids_u)
++        return ids_u16, wc
++
++    def _compact_forward(self, x, slot_active, b):
++        T, I, H, K = x.shape[-2], self.I, self.H, self.K
++        n = b * K
++        p = self.policy
++        ids, wc = self._compact_route(x, slot_active, b)
++        x = ttnn.reshape(x, (1, 1, T, H))
++        kw = dict(
++            sparsity=self.c_sparsity,
++            indices=ids,
++            memory_config=L1,
++            output_tile=ttnn.Tile([32, 32]),
++            compute_kernel_config=self.ckc,
++            dtype=ttnn.bfloat16,
+         )
++        gu_cfg = p.moe_gate_up_compact_cfg or p.moe_gate_up_cfg
++        # packed [up | gate] (one indexed matmul + 2 small slices beats two half-width matmuls)
++        ug = ttnn.sparse_matmul(x, self.w_up_gate, program_config=_mcast_1d_config(gu_cfg, T, 2 * I), **kw)
++        ug = ttnn.reshape(ug, (1, n, T, 2 * I))  # [1,1,1,n,T,2I] -> [1,n,T,2I]
++        up = ttnn.slice(ug, (0, 0, 0, 0), (1, n, T, I), memory_config=L1)
++        gate = ttnn.slice(ug, (0, 0, 0, I), (1, n, T, 2 * I), memory_config=L1)
++        ttnn.deallocate(ug)
++        act = ttnn.multiply(up, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SILU], memory_config=L1)
++        ttnn.deallocate(up)
++        ttnn.deallocate(gate)
++        down = ttnn.sparse_matmul(
++            act,
++            self.w_down,
++            program_config=_mcast_1d_config(p.moe_down_compact_cfg or p.moe_down_cfg, T, H),
++            is_input_a_sparse=True,
++            **kw,
++        )  # [1, n, T, H]
++        ttnn.deallocate(act)
++        ttnn.deallocate(ids)
++        wt = ttnn.permute(ttnn.reshape(wc, (1, 1, T, n)), (0, 3, 2, 1), memory_config=L1)  # [1, n, T, 1]
++        ttnn.deallocate(wc)
++        down_w = ttnn.multiply(down, wt, memory_config=L1)
++        ttnn.deallocate(down)
++        ttnn.deallocate(wt)
++        out = ttnn.experimental.fast_reduce_nc(down_w, dims=[1], memory_config=L1)
++        ttnn.deallocate(down_w)
++        return ttnn.reshape(out, (1, 1, T, H))
+
+     def _experts(self, x, routing, sparsity, rows_per_group, groups):
+         if groups != 1 or not self.policy.moe_decode_l1 or "moe_split_gate_up" in self.f:
+@@ -663,9 +798,15 @@
+         ttnn.deallocate(down_w)
+         return ttnn.reshape(out, (1, 1, T, H))
+
+-    def forward(self, x, slot_active=None):
++    def forward(self, x, slot_active=None, active_slots=None):
++        """``active_slots``: static decode bucket b (one trace per bucket): at most b slots are
++        active (any positions for the compact MoE path).  None = up to all 32 slots."""
+         T = x.shape[-2]
+         p = self.policy
++        if T <= TILE and active_slots is not None and slot_active is not None and p.moe_compact_max_users:
++            b = next((c for c in self.c_buckets if c >= active_slots), None)
++            if b is not None:
++                return self._compact_forward(x, slot_active, b)
+         if T > TILE and p.moe_dispatch_min_rows and T >= p.moe_dispatch_min_rows:
+             if T <= p.moe_dispatch_max_rows:
+                 return self._dispatch_forward(x)
+@@ -756,22 +897,32 @@
+         ttnn.deallocate(hs)
+         return hn
+
+-    def _ffn_block(self, h, slot_active=None):
++    def _ffn_block(self, h, slot_active=None, active_slots=None):
+         decode = h.shape[-2] <= TILE
+         hn = self._decode_ffn_norm(h) if decode else self._norm(h, self.ffn_norm, DRAM)
+         if isinstance(self.ffn, FusedDenseMLP):
+             out = self.ffn.forward(hn, residual=h)
+             ttnn.deallocate(hn)
+             return out
+-        f = self.ffn.forward(hn, slot_active=slot_active)
++        f = self.ffn.forward(hn, slot_active=slot_active, active_slots=active_slots)
+         ttnn.deallocate(hn)
+         out = ttnn.add(h, f, memory_config=DRAM)
+         ttnn.deallocate(f)
+         return out
+
+     def decode_forward(
+-        self, x, *, rope=None, rope_cos=None, rope_sin=None, cur_pos=None, page_table=None, slot_active=None
++        self,
++        x,
++        *,
++        rope=None,
++        rope_cos=None,
++        rope_sin=None,
++        cur_pos=None,
++        page_table=None,
++        slot_active=None,
++        active_slots=None,
+     ):
++        """``active_slots``: static bound on the active slots of this (traced) decode step; None = any."""
+         if self.op_norm_sh is not None:
+             xn = self.op_norm_sh(x, self.operator_norm)  # already in the qkv / in_proj input layout
+         else:
+@@ -783,7 +934,7 @@
+         else:
+             h = self.mixer.decode_forward(xn, slot_active, residual=x)
+         ttnn.deallocate(xn)
+-        out = self._ffn_block(h, slot_active)
++        out = self._ffn_block(h, slot_active, active_slots)
+         ttnn.deallocate(h)
+         return out
+
+--- a/tests/harness.py
++++ b/tests/harness.py
+@@ -214,6 +214,7 @@
+             torch.zeros(1, batch, dtype=torch.int32), mesh_device, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+         )
+         self.slot_active = to_dev(torch.zeros(1, 1, batch, 1), mesh_device)
++        self.active_slots = None  # static bound on active slots passed to decode_forward (None: not passed)
+         self.page_table = to_dev(
+             torch.zeros(batch, max_blocks_per_seq, dtype=torch.int32), mesh_device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+         )
+@@ -232,6 +233,7 @@
+
+
+ def decode_step(decoder, rope, inp: DecodeInputs):
++    kw = {} if inp.active_slots is None else {"active_slots": inp.active_slots}
+     if decoder.is_attention:
+         cos, sin = rope.decode_cos_sin(inp.rope_pos)
+         return decoder.decode_forward(
+@@ -242,5 +244,6 @@
+             cur_pos=inp.cur_pos,
+             page_table=inp.page_table,
+             slot_active=inp.slot_active,
++            **kw,
+         )
+-    return decoder.decode_forward(inp.x, slot_active=inp.slot_active)
++    return decoder.decode_forward(inp.x, slot_active=inp.slot_active, **kw)
+--- a/tests/test_functional_decoder.py
++++ b/tests/test_functional_decoder.py
+@@ -68,6 +68,7 @@
+     kv_dtype=None,  # None: the decoder's own default (functional/fused: BF16)
+     reserve_seqs=None,
+     decoder_factory=None,
++    active_slots=None,
+ ):
+     logger.info(f"TT_METAL_TRACE_ALLOC_TRACKING={os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING')}")
+     cfg = hf_config()
+@@ -99,6 +100,7 @@
+
+     # ---- decode: all slots each step (inactive slots get cur_pos -1 / garbage rows) ----
+     inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq)
++    inp.active_slots = active_slots
+     table = layout.decode_table(users)
+     steps = max(u.decode_steps for u in users)
+     trace_id = None
+--- a/tests/test_perf_determinism.py
++++ b/tests/test_perf_determinism.py
+@@ -122,7 +122,7 @@
+     run_perf_determinism(mesh_device, kind)
+
+
+-def run_perf_determinism(mesh_device, kind, decoder_factory=None, decode_iters=DECODE_ITERS, active_users=TILE):
++def run_perf_determinism(mesh_device, kind, decoder_factory=None, decode_iters=DECODE_ITERS, active_users=TILE, active_slots=None):
+     """``active_users``: decode slots with a real token (cur_pos >= 0); the rest are idle
+     (cur_pos = -1, garbage rows), e.g. 1 for single-user latency."""
+     layer_idx = LAYERS[kind]
+@@ -159,6 +159,7 @@
+
+     # ---------------- decode: `active_users` slots active (slot 3 first), traced ----------------
+     inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq)
++    inp.active_slots = active_slots
+     gen = torch.Generator().manual_seed(4321)
+     x = layer_inputs(TILE, H, 4321, embed).reshape(1, 1, TILE, H).to(torch.bfloat16).float()
+     cur = torch.randint(PREFILL_LEN - TILE, PREFILL_LEN + TILE, (TILE,), generator=gen, dtype=torch.int32)
+--- a/tests/bench_policy.py
++++ b/tests/bench_policy.py
+@@ -49,6 +49,15 @@
+             lens = [1 + (37 * i) % 200 for i in range(TILE)]
+             users = [User(slot=i, prompt_len=lens[i], decode_steps=3, seed=100 + i) for i in range(TILE)]
+             res = run_case(mesh_device, LAYERS[kind], users, chunk_size=128, decoder_factory=factory)
++        # small-bucket decode PCC (compact MoE path): LFM2_BENCH_SMALL="b:slot,slot,..;b:..."
++        for spec in filter(None, os.environ.get("LFM2_BENCH_SMALL", "").split(";")):
++            b, slots = spec.split(":")
++            slots = [int(s) for s in slots.split(",")]
++            su = [User(slot=s, prompt_len=1 + (53 * s) % 190, decode_steps=4, seed=500 + s) for s in slots]
++            sres = run_case(mesh_device, LAYERS[kind], su, chunk_size=128, decoder_factory=factory, active_slots=int(b) or None)
++            tag = f"small_b{b}_s{'-'.join(map(str, slots))}"
++            row[f"{tag}_decode_pcc"] = min(d for _, _, d in sres)
++            row[f"{tag}_delta_decode_pcc"] = min(u.delta[1] for u, _, _ in sres)
+         row.update(
+             min_prefill_pcc=min(p for _, p, _ in res),
+             min_decode_pcc=min(d for _, _, d in res),
+@@ -58,7 +67,10 @@
+     iters = int(os.environ.get("LFM2_BENCH_DECODE_ITERS", "20"))
+     batches = [int(b) for b in os.environ.get("LFM2_BENCH_BATCH", "1,32").split(",")]
+     for b in batches:
+-        perf = run_perf_determinism(mesh_device, kind, decoder_factory=factory, decode_iters=iters, active_users=b)
++        bucket = b if os.environ.get("LFM2_BENCH_BUCKET") == "1" and b < TILE else None
++        perf = run_perf_determinism(
++            mesh_device, kind, decoder_factory=factory, decode_iters=iters, active_users=b, active_slots=bucket
++        )
+         row[f"decode_us_b{b}"] = perf["decode_us"]
+         row["prefill_ms"] = perf["prefill_ms"]
+     logger.info(f"BENCH {json.dumps(row)}")
+@@ -68,3 +80,5 @@
+         f.write(json.dumps(row) + "\n")
+     if mode == "full":
+         assert row["min_prefill_pcc"] >= 0.995 and row["min_decode_pcc"] >= 0.995, row
++        for k in [k for k in row if k.startswith("small_b")]:
++            assert "_s3" in k or row[k] >= (DELTA_PCC_BAR if "delta" in k else 0.995), (k, row[k])

@@ -1,0 +1,3 @@
+final_nobucket base=default policy={} batch=1
+generated/profiler/reports/2026_10_17_01_01_47/ops_perf_results_2026_10_17_01_01_47.csv
+HEAD fee73388 + worktree tt/ tests/ md5 c168678bb3df bucket=0
