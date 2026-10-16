@@ -482,3 +482,9 @@ lowest free slot, so no KV-page or ShortConv-state row ever moves; holes allowed
   replays, one synchronize; the jsonl rows carry no iteration field).
 - Round-4 review (Fable): clean-pass; its four P3 doc nits fixed (replay-count provenance above, conv selection-matmul
   SLOW rows, limitation-6 prefill wall per kind, L1/w1 arithmetic).
+
+## Stage 3 commit
+`06705dad` (2026-10-17). Pre-commit hooks reformatted the code (black/isort; md5s in `logs/r3_final_code_md5.txt` are the
+pre-format provenance). Post-commit device smoke on the reformatted code (chip 0, real weights,
+`TT_METAL_TRACE_ALLOC_TRACKING=1`, `-k "multi_bucket_traces or (single_user and blackhole-1-2048) or perf"`): 18 passed
+(`logs/r3_post_commit_smoke.log`).
