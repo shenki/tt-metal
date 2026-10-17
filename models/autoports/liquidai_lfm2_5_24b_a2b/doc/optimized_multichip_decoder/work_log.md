@@ -183,3 +183,8 @@ Final runs (final code `logs/final_code_md5.txt`): suite 98/98 (`logs/r4_full_su
 1. L1 figure stated as construction-time 160 000 B + <= 24 576 B lazy per-bucket concat buffers = <= 184 576 B per core
    (README, work_log O-8, context_contract).  2. Audit row R7 now 56.7 -> 52.5 us (O-8 placement).  3. Superseded
    intermediate `tracy_final_runs_conv_r3.txt` deleted (tracy_final_runs.txt is the final set).
+
+## Stage 5 commit
+`bf1d8a2e` (2026-10-17). Post-commit device smoke on the hook-reformatted code (TT_METAL_TRACE_ALLOC_TRACKING=1,
+`-k "stacked or perf or (single_user and 65-2048) or (vs_single_chip and None) or (slot_reuse and conv_moe)"`):  23 passed, 75 deselected in 227.66s (0:03:47)
+(`logs/post_commit_smoke.log`).
