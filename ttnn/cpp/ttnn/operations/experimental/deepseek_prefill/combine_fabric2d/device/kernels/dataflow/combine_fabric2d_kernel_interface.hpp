@@ -27,6 +27,7 @@
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
@@ -36,14 +37,21 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
-// One token's row of the embedding as it crosses the wire. Read off the tensor rather than taken as a parameter —
-// and off its SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
-inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
-    const uint32_t emb = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
-    if (args.fp8_scale_block != 0) {
-        return emb + emb / args.fp8_scale_block * static_cast<uint32_t>(sizeof(float));
+// One token's row of the embedding as it crosses the wire: emb bf16 values, or with fp8_scale_block set the packed
+// [emb e4m3 | emb / fp8_scale_block fp32 scales] row, padded to whole 64 B lines so that it and its forwarding metadata
+// are a DRAM page of the forwarding buffer. The padding follows the scales and nothing reads it.
+inline uint32_t token_size_bytes(uint32_t emb, uint32_t fp8_scale_block) {
+    if (fp8_scale_block != 0) {
+        return per_token_cast_to_fp8::packed_row_bytes(emb, fp8_scale_block, 64);
     }
     return emb * static_cast<uint32_t>(sizeof(uint16_t));
+}
+
+// Read off the tensor rather than taken as a parameter — and off its SHAPE, not its page: a ROW_MAJOR dispatched
+// buffer pages by exactly one token, a TILE one does not.
+inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    return token_size_bytes(
+        static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]), args.fp8_scale_block);
 }
 
 inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
