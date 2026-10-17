@@ -1,0 +1,3 @@
+kc256 active=1 bucket=1 policy_override={"sdpa_decode_k_chunk":256}
+generated/profiler/reports/2026_10_17_13_21_28/ops_perf_results_2026_10_17_13_21_28.csv
+343a25a6 worktree c98f6125c24e

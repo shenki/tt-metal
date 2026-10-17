@@ -56,6 +56,13 @@ class MeshPlan:
     resid_cores: int = 8  # decode residual: width-sharded [32, 2048] on this many cores (= ffn_norm_cores)
     decode_reduce: str = "all_reduce_async"  # | "all_reduce" (composite RS + AG)
     prefill_reduce: str = "all_reduce"
+    persistent_scratch: bool = True  # decode all_reduce_async scratch: one persistent L1 buffer per mesh (stage 5)
+    moe_sharded_input: bool = True  # decode MoE experts read the width-sharded ffn-norm output (no S2I) (stage 5)
+    # dense MLP decode: w1 | w3 as ONE packed DRAM-sharded matmul (cores, in0_block_w, readers); None = two matmuls
+    dense_w13_packed: tuple = (32, 2, 3)
+    # ShortConv decode chain on the out_proj input shards (8 cores x [32, 64]): B / C / x sliced straight from the
+    # sharded in_proj output, state / taps / slot mask on the same shards, no S2I / I2S (stage 5 review P1)
+    conv_sharded_chain: bool = True
 
     def summary(self):
         return {k: getattr(self, k) for k in self.__dataclass_fields__}
@@ -92,6 +99,15 @@ MC_POLICY = replace(
     # next to any L1 allocation -- here the CCL global semaphores (2.7 KB/bank); unified FFN instead
     dispatch_ffn="unified",
     dispatch_fidelity="hifi2",
+    # ---- stage 5 (doc/optimized_multichip_decoder/work_log.md) ----
+    moe_route_v3_l1=True,  # routing constants in L1 (only the unused hybrid op forbade it): -1.3 us / MoE layer
+    attn_concat_persistent=True,  # persistent L1 concat buffer per bucket: -1.7 us / attention layer
+    moe_down_small_bucket_cfg=(
+        8,
+        (8, 6, 12, 1),
+    ),  # down at ~26 active experts (b8): 110.3 vs 124.3 us (b8 only measured)
+    moe_compact_weight_before_down=True,  # weight the [n,32,384] activation, not the [n,32,2048] output
+    moe_compact_out_sharded=True,  # expert sum written in the all-reduce layout: conv_moe b1 206.4 -> 204.6 us (with ^)
 )
 
 
@@ -222,7 +238,7 @@ class MCAttention(OptimizedAttention):
 class MCShortConv(OptimizedShortConv):
     """Channel-parallel ShortConv (512 channels per chip, local state); returns the out_proj partial."""
 
-    def __init__(self, mesh_device, args_local, sds, max_batch_size, policy, fusions):
+    def __init__(self, mesh_device, args_local, sds, max_batch_size, policy, fusions, sharded_chain=False):
         super().__init__(mesh_device, args_local, sds[0], max_batch_size, policy, fusions)
         assert self.ds_in is not None and self.ds_out is not None, "multichip conv needs ds_conv_in / ds_conv_out"
         _reshard_ds(self.ds_in, [s["conv.in_proj.weight"].T for s in sds])
@@ -232,12 +248,61 @@ class MCShortConv(OptimizedShortConv):
         )
         taps = [s["conv.conv.weight"][:, 0, :] for s in sds]  # [c, K] per chip
         self.taps = [_shard_like(self.taps[k], [w[:, k].reshape(1, 1, 1, -1) for w in taps], dim=-1) for k in range(3)]
+        self.sharded_chain = sharded_chain
+        if sharded_chain:
+            # the chain intermediates run on the out_proj input shards (8 cores x [32, c / 8]); the persistent operands
+            # (per-slot state, taps expanded to [32, c]) stay in DRAM: L1 is allocated at the same address in every bank,
+            # so 30 layers x 5 x 4 KB would pin ~600 KB of every core's L1 for 1.3 us per layer (work_log O-8)
+            self.chain_mem = self.ds_out.in_mem
+            self.taps_sh = [
+                ttnn.from_torch(
+                    torch.cat(
+                        [w[:, k].reshape(1, 1, 1, -1).expand(1, 1, self.B, -1) for w in taps], dim=-1
+                    ).contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=DRAM,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                )
+                for k in range(3)
+            ]
+
+    def decode_forward(self, x, slot_active, residual=None):
+        if not self.sharded_chain:
+            return super().decode_forward(x, slot_active, residual)
+        assert residual is None
+        mem, C, T = self.chain_mem, self.H, x.shape[-2]
+        assert slot_active.shape[-1] == C, "sharded ShortConv chain needs the full-width slot_mask [1, 1, B, c]"
+        mask = slot_active if slot_active.memory_config() == mem else ttnn.to_memory_config(slot_active, mem)
+        bcx = self.ds_in.decode_sharded(x, self.ckc)
+        b = ttnn.slice(bcx, (0, 0, 0, 0), (1, 1, T, C), memory_config=mem)
+        c = ttnn.slice(bcx, (0, 0, 0, C), (1, 1, T, 2 * C), memory_config=mem)
+        xx = ttnn.slice(bcx, (0, 0, 0, 2 * C), (1, 1, T, 3 * C), memory_config=mem)
+        ttnn.deallocate(bcx)
+        bx = ttnn.multiply(b, xx, memory_config=mem)
+        ttnn.deallocate(b)
+        ttnn.deallocate(xx)
+        conv = ttnn.multiply(self.state[0], self.taps_sh[0], memory_config=mem)
+        conv = ttnn.mac(self.state[1], self.taps_sh[1], conv)
+        conv = ttnn.mac(bx, self.taps_sh[2], conv)
+        ttnn.where(mask, self.state[1], self.state[0], output_tensor=self.state[0])
+        ttnn.where(mask, bx, self.state[1], output_tensor=self.state[1])
+        ttnn.deallocate(bx)
+        if mask is not slot_active:
+            ttnn.deallocate(mask)
+        y = ttnn.multiply(c, conv, memory_config=mem)
+        ttnn.deallocate(c)
+        ttnn.deallocate(conv)
+        out = self.ds_out.decode(y, self.ckc)  # y already in the out_proj input layout; partial stays sharded
+        ttnn.deallocate(y)
+        return out
 
 
 class MCDenseMLP(OptimizedDenseMLP):
     """w1/w3 column-parallel, w2 row-parallel; returns the w2 partial."""
 
-    def __init__(self, mesh_device, sds, policy, fusions):
+    def __init__(self, mesh_device, sds, policy, fusions, packed=None):
         super().__init__(mesh_device, sds[0], policy, fusions)
         w1 = [s["feed_forward.w1.weight"].T for s in sds]
         w3 = [s["feed_forward.w3.weight"].T for s in sds]
@@ -251,6 +316,34 @@ class MCDenseMLP(OptimizedDenseMLP):
         _reshard_ds(self.ds_w3, w3)
         _as_partial(self.ds_w2_dec)
         self.ds_w2_dec.weight = _shard_like(self.ds_w2_dec.weight, [_ds_host(self.ds_w2_dec, w) for w in w2], dim=-2)
+        self.ds_w13 = None
+        if packed:  # decode: one DS matmul over [w1 | w3] (each zero-padded to ds_w1.n, the K of the padded w2)
+            n1 = self.ds_w1.n
+            pk = [torch.cat([_ds_host(self.ds_w1, a), _ds_host(self.ds_w3, b)], dim=-1) for a, b in zip(w1, w3)]
+            self.ds_w13 = DramShardedLinear(mesh_device, pk[0], DTYPES[policy.dense_w13], packed)
+            self.ds_w13.weight = _shard_like(self.ds_w13.weight, pk, dim=-1)
+            assert self.ds_w13.n == 2 * n1
+            for lin in (self.ds_w1, self.ds_w3):  # the decode-only per-projection copies are not used
+                ttnn.deallocate(lin.weight)
+            self.ds_w1 = self.ds_w3 = None
+            self.n1 = n1
+
+    def forward(self, x, residual=None):
+        if self.ds_w13 is None or x.shape[-2] > TILE:
+            return super().forward(x, residual)
+        assert (
+            residual is None
+        ), "multichip dense MLP returns the row-parallel partial (residual added after the all-reduce)"
+        gu = self.ds_w13.decode(x, self.ckc, L1)  # [32, 2 * n1] interleaved
+        g = ttnn.slice(gu, (0, 0, 0, 0), (1, 1, TILE, self.n1), memory_config=L1)
+        u = ttnn.slice(gu, (0, 0, 0, self.n1), (1, 1, TILE, 2 * self.n1), memory_config=L1)
+        ttnn.deallocate(gu)
+        h = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=L1)
+        ttnn.deallocate(g)
+        ttnn.deallocate(u)
+        out = self.ds_w2_dec.decode(h, self.ckc, DRAM)  # row-parallel partial (sharded, _PartialOut)
+        ttnn.deallocate(h)
+        return out
 
 
 class MCMoE(OptimizedMoE):
@@ -279,6 +372,91 @@ class MCMoE(OptimizedMoE):
             dim=-1,
         )
         self.w_down = _shard_like(self.w_down, [dn.transpose(1, 2).unsqueeze(0) for _, _, dn in per_chip], dim=-2)
+        if (
+            getattr(self, "v3_bias", None) is not None
+            and self.v3_bias.memory_config().buffer_type == ttnn.BufferType.L1
+        ):
+            # moe_route_v3_l1 puts the SHARED routing constants in L1 (allocated once per device); the per-layer
+            # [32, 64] fp32 bias would pin ~4 KB of every core's L1 per MoE layer (~150 KB for 38 layers): keep it in DRAM
+            b = ttnn.to_memory_config(self.v3_bias, DRAM)
+            ttnn.deallocate(self.v3_bias)
+            self.v3_bias = b
+
+    # ---------------- decode: compact experts (bucket <= moe_compact_max_users) ----------------
+    def _compact_forward(self, x, slot_active, b):
+        """``OptimizedMoE._compact_forward`` with ``Policy.moe_compact_weight_before_down`` (routing weight applied to
+        the [n, 32, I] activation) and ``moe_compact_out_sharded`` (expert-sum written in ``self.out_mem``, the
+        all-reduce layout, so no reshard before the all-reduce)."""
+        p = self.policy
+        if not (p.moe_compact_weight_before_down or p.moe_compact_out_sharded):
+            return super()._compact_forward(x, slot_active, b)
+        from .optimized_decoder import _mcast_1d_config
+
+        T, I, H, K = x.shape[-2], self.I, self.H, self.K
+        n = b * K
+        ids, wc = (
+            self._compact_route_v3(x, b) if (p.moe_route_v3 and T == TILE) else self._compact_route(x, slot_active, b)
+        )
+        x = ttnn.reshape(x, (1, 1, T, H))
+        kw = dict(
+            sparsity=self.c_sparsity,
+            indices=ids,
+            memory_config=L1,
+            output_tile=ttnn.Tile([32, 32]),
+            compute_kernel_config=self.ckc,
+            dtype=ttnn.bfloat16,
+        )
+        gu_cfg = p.moe_gate_up_compact_cfg or p.moe_gate_up_cfg
+        ug = ttnn.sparse_matmul(x, self.w_up_gate, program_config=_mcast_1d_config(gu_cfg, T, 2 * I), **kw)
+        ug = ttnn.reshape(ug, (1, n, T, 2 * I))
+        up = ttnn.slice(ug, (0, 0, 0, 0), (1, n, T, I), memory_config=L1)
+        gate = ttnn.slice(ug, (0, 0, 0, I), (1, n, T, 2 * I), memory_config=L1)
+        ttnn.deallocate(ug)
+        act = ttnn.multiply(up, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SILU], memory_config=L1)
+        ttnn.deallocate(up)
+        ttnn.deallocate(gate)
+        wt = ttnn.permute(ttnn.reshape(wc, (1, 1, T, n)), (0, 3, 2, 1), memory_config=L1)  # [1, n, T, 1]
+        ttnn.deallocate(wc)
+        if p.moe_compact_weight_before_down:
+            act_w = ttnn.multiply(act, wt, memory_config=L1)
+            ttnn.deallocate(act)
+            ttnn.deallocate(wt)
+            act = act_w
+        down = ttnn.sparse_matmul(
+            act,
+            self.w_down,
+            program_config=_mcast_1d_config(p.moe_down_compact_cfg or p.moe_down_cfg, T, H),
+            is_input_a_sparse=True,
+            **kw,
+        )  # [1, n, T, H]
+        ttnn.deallocate(act)
+        ttnn.deallocate(ids)
+        if not p.moe_compact_weight_before_down:
+            down_w = ttnn.multiply(down, wt, memory_config=L1)
+            ttnn.deallocate(down)
+            ttnn.deallocate(wt)
+            down = down_w
+        out_mem = self.out_mem if (p.moe_compact_out_sharded and getattr(self, "out_mem", None) is not None) else L1
+        out = ttnn.experimental.fast_reduce_nc(down, dims=[1], memory_config=out_mem)
+        ttnn.deallocate(down)
+        return ttnn.reshape(out, (1, 1, T, H))
+
+    # ---------------- decode: bucket-dependent down config ----------------
+    def forward(self, x, slot_active=None, x_sharded=None, active_slots=None):
+        self._bucket = active_slots
+        try:
+            return super().forward(x, slot_active=slot_active, x_sharded=x_sharded, active_slots=active_slots)
+        finally:
+            self._bucket = None
+
+    def _mm_cfg(self, role, rows, n, groups):
+        small = self.policy.moe_down_small_bucket_cfg
+        b = getattr(self, "_bucket", None)
+        if small and role == "down" and groups == 1 and rows <= TILE and b is not None and b <= small[0]:
+            from .optimized_decoder import _mcast_1d_config
+
+            return _mcast_1d_config(small[1], rows, n)
+        return super()._mm_cfg(role, rows, n, groups)
 
     # ---------------- prefill token dispatch, expert-parallel ----------------
     def _init_dispatch(self, sd_local):
@@ -310,10 +488,20 @@ class MCMoE(OptimizedMoE):
         loc_g = [chips([gate[d * El + j].T for d in range(tp)], dt_gu) for j in range(El)]  # (H, I)
         loc_u = [chips([up[d * El + j].T for d in range(tp)], dt_gu) for j in range(El)]
         loc_d = [chips([down[d * El + j].T for d in range(tp)], dt_d) for j in range(El)]  # (I, H)
-        pad = W - 1 - El  # dummy (zero input) and unused entries alias local expert 0's weights
+        pad = W - 1 - El  # unused entries (count 0) alias local expert 0's weights
+        # dummy entry 0: gate / up alias expert 0, down is ZERO, so its output rows are exactly 0 whatever their
+        # (finite) input rows -> the gather table can be x itself (no zero-row header / concat)
+        self.d_zero_down = ttnn.from_torch(
+            torch.zeros(gate.shape[1], H),
+            dtype=dt_d,
+            layout=ttnn.TILE_LAYOUT,
+            device=md,
+            memory_config=DRAM,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )  # (I, H)
         self.d_gates = [loc_g[0]] + loc_g + [loc_g[0]] * pad
         self.d_ups = [loc_u[0]] + loc_u + [loc_u[0]] * pad
-        self.d_downs = [loc_d[0]] + loc_d + [loc_d[0]] * pad
+        self.d_downs = [self.d_zero_down] + loc_d + [loc_d[0]] * pad
         rm = ttnn.ROW_MAJOR_LAYOUT
         self.d_gidx = _as_tt(torch.arange(W, dtype=torch.int32), md, dtype=ttnn.uint32, layout=rm)
         ids = torch.full((tp, W), -1.0)  # global expert id of each local entry (-1: matches no pair)
@@ -332,14 +520,17 @@ class MCMoE(OptimizedMoE):
         self.d_dummy_count = _as_tt(dummy, md, dtype=ttnn.float32)  # the dummy region: one full tile
         pmax = self.policy.moe_dispatch_max_rows * K
         mb = self._max_buf(self.policy.moe_dispatch_max_rows)
-        # scatter source of each pair (token t -> table row t + 32; rows 0..31 are zero) as a [P, 1] column
+        # scatter source of each pair (token t -> table row t, the gather table is x) as a [P, 1] column; pairs and
+        # buffer rows with nothing local get token row r mod 32 (finite rows: dummy / unused rows are never read back)
         self.d_src_col = _as_tt(
             (torch.arange(pmax).div(K, rounding_mode="floor") + TILE).float().reshape(pmax, 1), md, dtype=ttnn.float32
-        )
+        )  # + 32: sources >= 32 mark written (local) slots for the max-with-spread below; subtracted after
         self.d_pmod_col = _as_tt((torch.arange(pmax) % TILE).float().reshape(pmax, 1), md, dtype=ttnn.float32)
-        self.d_spread = _as_tt((torch.arange(mb) % TILE).float().reshape(1, mb), md, dtype=ttnn.float32)
+        # buffer row r without a local pair gathers x row (r mod 32).  Exactness of max(src, spread) below: a local slot
+        # holds token + 32 and r mod 32 <= token there (a token's top-K experts are distinct, so an expert region holds
+        # at most one pair per earlier token: slot index inside a region <= token index), so max() keeps the token
+        self.d_spread = _as_tt((torch.arange(mb) % TILE + TILE).float().reshape(1, mb), md, dtype=ttnn.float32)
         self.d_src_zero = _as_tt(torch.zeros(1, mb), md, dtype=ttnn.float32, layout=rm)
-        self.d_zero_row = _as_tt(torch.zeros(1, 1, TILE, H), md, layout=rm)  # gather-table header
         R = self.policy.moe_scatter_rows
         if R > 1:
             self.d_src_zero_rows = _as_tt(
@@ -410,6 +601,8 @@ class MCMoE(OptimizedMoE):
         ttnn.deallocate(cum)
         pmod = ttnn.slice(self.d_pmod_col, (0, 0), (P, 1))
         dest = ttnn.add(dest, ttnn.subtract(pmod, ttnn.multiply(pmod, local)))  # non-local: dummy row p mod 32
+        # ([P, 1] -> [1, P] then row-major [R, P / R]: going straight to the [R, P / R] tile form is slower,
+        # 248 vs 104 us of ReshapeView per chunk: work_log O-7)
         dest_u = ttnn.typecast(rm(ttnn.reshape(dest, (1, P))), ttnn.uint32)
         ttnn.deallocate(dest)
         src_col = ttnn.multiply(ttnn.slice(self.d_src_col, (0, 0), (P, 1)), local)  # non-local -> 0
@@ -431,12 +624,15 @@ class MCMoE(OptimizedMoE):
                 ttnn.scatter(ttnn.slice(self.d_src_zero, (0, 0), (1, maxbuf)), -1, dest_u, src_tok), ttnn.TILE_LAYOUT
             )
         ttnn.deallocate(src_tok)
-        # local destinations hold token rows >= 32, everything else 0 -> zero row r mod 32 of the table
+        # local slots hold token + 32, everything else 0 -> max with (r mod 32) + 32; minus 32: local -> token row of x,
+        # others -> row r mod 32 of x (finite; only the zero-down dummy / never-read rows use them)
         src_f = ttnn.maximum(src_t, ttnn.slice(self.d_spread, (0, 0), (1, maxbuf)))
         ttnn.deallocate(src_t)
-        src = ttnn.typecast(rm(src_f), ttnn.uint32)
+        src_x = ttnn.add(src_f, -float(TILE))  # spread values are r mod 32 + 32, local slots token + 32
         ttnn.deallocate(src_f)
-        table = ttnn.reshape(ttnn.concat([self.d_zero_row, rm(x)], dim=2), (T + TILE, H))
+        src = ttnn.typecast(rm(src_x), ttnn.uint32)
+        ttnn.deallocate(src_x)
+        table = ttnn.reshape(rm(x), (T, H))
         buf = ttnn.reshape(ttnn.embedding(src, table, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16), (maxbuf, H))
         ttnn.deallocate(src)
         ttnn.deallocate(table)
@@ -473,6 +669,9 @@ class MCMoE(OptimizedMoE):
 # ------------------------------------------------------------------------------------------------
 
 
+_AR_SCRATCH = {}  # (mesh id, H, tp, cores) -> (mesh, persistent all_reduce_async scratch)
+
+
 class MeshReduce:
     """Sum of the per-chip partials, replicated on every chip (bitwise identical on all chips)."""
 
@@ -487,6 +686,24 @@ class MeshReduce:
         self.resid_mem = width_shard_layout(mesh_device, plan.resid_cores, hidden // plan.resid_cores)
         # all_reduce_async scratch: every chip's partial side by side on the residual cores
         self.buf_mem = width_shard_layout(mesh_device, plan.resid_cores, hidden * plan.tp // plan.resid_cores)
+        self.scratch = None
+        if plan.persistent_scratch:
+            # two [32, H * tp] L1 buffers per mesh, shared by every layer and bucket trace, used alternately: all_reduce_async
+            # writes into the OTHER chips' scratch, and a chip can be at most one all-reduce ahead of the slowest one (it
+            # cannot complete all-reduce k+1 before every chip has sent its k+1 data, which each sends only after finishing
+            # k), so with two buffers a leading chip never overwrites a scratch another chip is still reducing from.
+            # Every layer issues 2 all-reduces, so each layer / trace starts on buffer 0.
+            key = (id(mesh_device), hidden, plan.tp, plan.resid_cores)
+            hit = _AR_SCRATCH.get(key)
+            if hit is None or hit[0] is not mesh_device:
+                bufs = [
+                    ttnn.empty(
+                        (1, 1, TILE, hidden * plan.tp), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, self.buf_mem
+                    )
+                    for _ in range(2)
+                ]
+                hit = _AR_SCRATCH[key] = (mesh_device, bufs, [0])
+            self.scratch, self._scratch_idx = hit[1], hit[2]
 
     def decode(self, partial):
         """``partial`` [1, 1, 32, H] (any memory) -> reduced, width-sharded on ``resid_mem``."""
@@ -500,11 +717,20 @@ class MeshReduce:
             )
             ttnn.deallocate(p)
             return out
-        # scratch allocated per call (in the trace like any intermediate).  A persistent L1 scratch is no longer
-        # blocked (the hybrid prefill op that claimed all of L1 is not used): optimized-multichip-stage candidate
-        buf = ttnn.empty(
-            (1, 1, p.shape[-2], self.H * self.plan.tp), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh_device, self.buf_mem
-        )
+        # persistent shared scratch (MeshPlan.persistent_scratch: dead between all-reduces, so one buffer serves
+        # every layer and every bucket trace), else allocated per call inside the trace like any intermediate
+        buf = None
+        if self.scratch is not None:
+            buf = self.scratch[self._scratch_idx[0]]
+            self._scratch_idx[0] ^= 1
+        if buf is None:
+            buf = ttnn.empty(
+                (1, 1, p.shape[-2], self.H * self.plan.tp),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.mesh_device,
+                self.buf_mem,
+            )
         out = ttnn.experimental.all_reduce_async(
             p,
             buf,
@@ -515,7 +741,8 @@ class MeshReduce:
             num_links=self.plan.num_links,
             memory_config=self.resid_mem,
         )
-        ttnn.deallocate(buf)
+        if self.scratch is None:
+            ttnn.deallocate(buf)
         ttnn.deallocate(p)
         return out
 
@@ -540,6 +767,11 @@ class MultichipDecoder(OptimizedDecoder):
     """TP = 4 decoder layer on a 1x4 mesh (see module docstring).  Same prefill / decode signatures as
     the single-chip decoder; decode input/output may be passed DRAM/L1 interleaved or already in
     ``resid_mem`` (the stacked-model contract: no conversion between layers)."""
+
+    @property
+    def slot_mask_mem(self):
+        """Memory config the ShortConv decode wants ``slot_mask`` in (None: any; a caller can build it once per step)."""
+        return getattr(self.mixer, "chain_mem", None) if not self.is_attention else None
 
     @property
     def slot_mask_width(self):
@@ -591,11 +823,13 @@ class MultichipDecoder(OptimizedDecoder):
             )
         else:
             la = local_args(args, plan.tp, "conv")
-            self.mixer = MCShortConv(mesh_device, la, sds, max_batch_size, policy, self.fusions)
+            self.mixer = MCShortConv(
+                mesh_device, la, sds, max_batch_size, policy, self.fusions, plan.conv_sharded_chain
+            )
         if args.is_moe_layer(layer_idx):
             self.ffn = MCMoE(mesh_device, local_args(args, plan.tp, "moe"), sds, policy, self.fusions, sd, plan.tp)
         else:
-            self.ffn = MCDenseMLP(mesh_device, sds, policy, self.fusions)
+            self.ffn = MCDenseMLP(mesh_device, sds, policy, self.fusions, plan.dense_w13_packed)
         del sds
         self.conv_prefill_windowed = (not self.is_attention) and policy.conv_prefill_windowed_tail
         consumer = self.mixer.ds_qkv if self.is_attention else self.mixer.ds_in
@@ -605,6 +839,10 @@ class MultichipDecoder(OptimizedDecoder):
         self.reduce = MeshReduce(mesh_device, plan, H)
         assert self.ffn_norm_sh.mem == self.reduce.resid_mem
         self.resid_mem = self.reduce.resid_mem
+        if isinstance(self.ffn, MCMoE):
+            self.ffn.out_mem = (
+                self.resid_mem
+            )  # compact expert sum written in the all-reduce layout (moe_compact_out_sharded)
 
     # ---- decode ----
     def decode_forward(
@@ -644,14 +882,19 @@ class MultichipDecoder(OptimizedDecoder):
         if xr is not x:
             ttnn.deallocate(xr)
         hs = self.ffn_norm_sh(h, self.ffn_norm)  # h already on the ffn-norm grid
-        hn = ttnn.to_memory_config(hs, L1)
         if isinstance(self.ffn, FusedDenseMLP):
+            hn = ttnn.to_memory_config(hs, L1)
             ttnn.deallocate(hs)
             f = self.ffn.forward(hn, residual=None)
+            ttnn.deallocate(hn)
+        elif self.plan.moe_sharded_input:  # router and expert matmuls both read the sharded copy
+            f = self.ffn.forward(hs, slot_active=slot_active, x_sharded=hs, active_slots=active_slots)
+            ttnn.deallocate(hs)
         else:
+            hn = ttnn.to_memory_config(hs, L1)
             f = self.ffn.forward(hn, slot_active=slot_active, x_sharded=hs, active_slots=active_slots)
             ttnn.deallocate(hs)
-        ttnn.deallocate(hn)
+            ttnn.deallocate(hn)
         r = self.reduce.decode(f)
         out = ttnn.add(h, r, memory_config=self.resid_mem)
         ttnn.deallocate(r)

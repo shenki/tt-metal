@@ -149,5 +149,30 @@
       "replicated: norms, router (+ DS decode router), RoPE tables, routing / dispatch constants",
       "l1_small_size 24576 (CCL semaphores); decode all-reduce scratch allocated per call (no persistent L1)"
     ]
+  },
+  "optimized_multichip_decoder": {
+    "current_supported_context": 131072,
+    "capability_reduction": null,
+    "decode_batch": 32,
+    "kv_layout_change": null,
+    "measured_per_chip_gib": {
+      "decoder_stack_40_layers_32x131072": 23.229,
+      "stack_fraction_of_dram": 0.732,
+      "dram_capacity": 31.738
+    },
+    "measurement": "tests/test_multichip_decoder.py::test_multichip_memory_capacity -> doc/optimized_multichip_decoder/sweeps/memory_capacity.json",
+    "persistent_allocation_changes": [
+      "two all_reduce_async scratch buffers [32, 8192] bf16 width-sharded L1 per mesh, used alternately (2 x 64 KiB per core on the 8-core grid; L1 is allocated at one address in every bank)",
+      "attention concat output buffers in L1 per (bucket rows, layout), shared by the layers; moe_route_v3 index constants in L1 (shared); per-layer routing bias in DRAM",
+      "ShortConv state and expanded taps in DRAM (no per-layer L1); prefill dispatch: one zero BFP8 down projection [1536, 2048] per MoE layer per chip (3.3 MB)",
+      "dense layers: packed [w1 | w3] decode DS weight replaces the two per-projection decode copies (same bytes)",
+      "measured persistent L1 of the 40-layer stack: 160000 B per core at construction (0 per additional layer) + <= 24576 B of lazily allocated per-bucket attention concat buffers (<= 184576 B)"
+    ],
+    "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/optimized_multichip_decoder/logs/r4_full_suite.log",
+    "persistent_l1_bytes_per_core_decoder_stack": {
+      "at_construction": 160000,
+      "lazy_per_bucket_concat_buffers_max": 24576,
+      "upper_bound": 184576
+    }
   }
 }

@@ -167,6 +167,7 @@ def run_perf_determinism(
         layout.max_blocks_per_seq,
         active_slots=active_slots,
         slot_mask_width=getattr(decoder, "slot_mask_width", None),
+        slot_mask_mem=getattr(decoder, "slot_mask_mem", None),
     )
     gen = torch.Generator().manual_seed(4321)
     x = layer_inputs(TILE, H, 4321, embed).reshape(1, 1, TILE, H).to(torch.bfloat16).float()

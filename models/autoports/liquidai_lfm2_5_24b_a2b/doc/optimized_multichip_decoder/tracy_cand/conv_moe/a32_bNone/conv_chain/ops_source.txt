@@ -1,0 +1,3 @@
+conv_chain active=32 bucket=None policy_override={}
+generated/profiler/reports/2026_10_17_14_57_19/ops_perf_results_2026_10_17_14_57_19.csv
+343a25a6 worktree e8a3925b6318

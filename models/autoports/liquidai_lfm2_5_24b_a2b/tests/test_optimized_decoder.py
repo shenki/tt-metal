@@ -303,6 +303,7 @@ def run_multi_bucket(mesh_device, layer_idx, chunk_size=128, factory=None):
         H,
         layout.max_blocks_per_seq,
         slot_mask_width=getattr(decoder, "slot_mask_width", None),
+        slot_mask_mem=getattr(decoder, "slot_mask_mem", None),
     )
     garbage = torch.Generator().manual_seed(7)
     active, step = [], {id(u): 0 for u in U}

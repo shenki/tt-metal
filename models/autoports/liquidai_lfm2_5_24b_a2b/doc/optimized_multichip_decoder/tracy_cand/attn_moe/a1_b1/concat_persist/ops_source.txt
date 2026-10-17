@@ -1,0 +1,3 @@
+concat_persist active=1 bucket=1 policy_override={"moe_route_v3_l1":true,"attn_concat_persistent":true}
+generated/profiler/reports/2026_10_17_12_47_38/ops_perf_results_2026_10_17_12_47_38.csv
+343a25a6 worktree 6e3bbd9d5b9f

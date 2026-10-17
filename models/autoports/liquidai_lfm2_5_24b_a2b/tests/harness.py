@@ -204,7 +204,16 @@ def run_prefill(decoder, rope, mesh_device, layout, user, chunk_size, continuati
 class DecodeInputs:
     """Persistent decode inputs (stable addresses for trace capture); refreshed by host copies."""
 
-    def __init__(self, mesh_device, H, max_blocks_per_seq, batch=TILE, active_slots=None, slot_mask_width=None):
+    def __init__(
+        self,
+        mesh_device,
+        H,
+        max_blocks_per_seq,
+        batch=TILE,
+        active_slots=None,
+        slot_mask_width=None,
+        slot_mask_mem=None,
+    ):
         """``slot_mask_width``: width of ``slot_mask`` (default H; the multichip ShortConv takes its
         local channel count, ``decoder.slot_mask_width``)."""
         self.mesh_device = mesh_device
@@ -218,6 +227,10 @@ class DecodeInputs:
         )
         self.slot_active = to_dev(torch.zeros(1, 1, batch, 1), mesh_device)
         self.slot_mask = to_dev(torch.zeros(1, 1, batch, slot_mask_width or H), mesh_device)  # slot_active broadcast
+        if slot_mask_mem is not None:  # e.g. the multichip ShortConv chain shards (decoder.slot_mask_mem)
+            m = ttnn.to_memory_config(self.slot_mask, slot_mask_mem)
+            ttnn.deallocate(self.slot_mask)
+            self.slot_mask = m
         self.page_table = to_dev(
             torch.zeros(batch, max_blocks_per_seq, dtype=torch.int32), mesh_device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
         )

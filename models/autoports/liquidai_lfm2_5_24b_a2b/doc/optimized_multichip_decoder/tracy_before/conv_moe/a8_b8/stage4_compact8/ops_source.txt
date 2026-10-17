@@ -1,0 +1,3 @@
+stage4_compact8 active=8 bucket=8 policy_override={"moe_compact_max_users":8}
+generated/profiler/reports/2026_10_17_12_39_07/ops_perf_results_2026_10_17_12_39_07.csv
+343a25a6 worktree d41d8cd98f00

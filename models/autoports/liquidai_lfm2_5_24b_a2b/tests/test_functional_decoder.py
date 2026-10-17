@@ -116,6 +116,7 @@ def run_case(
         layout.max_blocks_per_seq,
         active_slots=active_slots,
         slot_mask_width=getattr(decoder, "slot_mask_width", None),
+        slot_mask_mem=getattr(decoder, "slot_mask_mem", None),
     )
     table = layout.decode_table(users)
     steps = max(u.decode_steps for u in users)
@@ -347,6 +348,7 @@ def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size, decoder_fac
         H,
         layout.max_blocks_per_seq,
         slot_mask_width=getattr(decoder, "slot_mask_width", None),
+        slot_mask_mem=getattr(decoder, "slot_mask_mem", None),
     )
     garbage = torch.Generator().manual_seed(99)
     active = []  # users decoding on the next replay

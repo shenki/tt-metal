@@ -90,7 +90,7 @@ def test_multichip_single_user(mesh_device, kind, prompt_len, chunk):
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize("kind", list(LAYERS))
-@pytest.mark.parametrize("active, bucket", [(32, None), (1, None), (1, 1), (4, 4)])
+@pytest.mark.parametrize("active, bucket", [(32, None), (1, None), (1, 1), (4, 4), (8, 8)])
 def test_multichip_perf_determinism_no_fallback(mesh_device, kind, active, bucket):
     from .test_perf_determinism import run_perf_determinism
 
@@ -174,6 +174,7 @@ def run_mc_vs_single_chip(mesh_device, layer_idx, users, *, chunk_size, active_s
             layout.max_blocks_per_seq,
             active_slots=active_slots,
             slot_mask_width=getattr(dec, "slot_mask_width", None),
+            slot_mask_mem=getattr(dec, "slot_mask_mem", None),
         )
         table = layout.decode_table(users)
         garbage = torch.Generator().manual_seed(77)
@@ -421,6 +422,10 @@ def test_multichip_memory_capacity(mesh_device):
         v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
         return v.num_banks * v.total_bytes_allocated_per_bank, v.num_banks * v.total_bytes_per_bank
 
+    def l1_per_bank():  # L1 is allocated at one address across all banks: per-bank bytes are what every core loses
+        v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+        return v.total_bytes_allocated_per_bank, v.total_bytes_per_bank
+
     cfg = hf_config()
     args = Lfm2MoeArgs.from_hf_config(cfg)
     ctx = args.max_position_embeddings
@@ -428,13 +433,17 @@ def test_multichip_memory_capacity(mesh_device):
     keep = []
     base, total = dram_used()
     rec["dram_bytes_per_chip"] = total
+    l1_base, l1_total = l1_per_bank()
+    rec["l1_bytes_per_bank"] = l1_total
     for kind, layer in LAYERS.items():
         before, _ = dram_used()
+        l1_before, _ = l1_per_bank()
         sd = layer_state_dict(layer, _use_real())
         dec, rope = make_multichip(sd, cfg, args, layer, mesh_device, ctx)
         del sd
         after, _ = dram_used()
         rec[f"{kind}_layer_bytes"] = after - before
+        rec[f"{kind}_layer_l1_bytes_per_bank"] = l1_per_bank()[0] - l1_before
         if dec.is_attention:
             users = [User(slot=0, prompt_len=1, decode_steps=0, seed=0)]
             layout = PagedLayout(users, ctx, reserve_seqs=TILE)
@@ -452,12 +461,31 @@ def test_multichip_memory_capacity(mesh_device):
         + n_attn * (rec["attn_moe_layer_bytes"] + rec["kv_cache_bytes_per_attention_layer_32x131072"])
     )
     rec["layer_counts"] = {"conv_dense": n_dense, "conv_moe": n_conv_moe, "attn_moe": n_attn}
+    # persistent L1 per bank of the 40-layer stack.  The first layer of a kind also allocates what is shared once per
+    # device (all-reduce scratch pair, routing constants, concat buffers); a SECOND conv_moe layer gives the true
+    # per-layer delta, and attn_moe is built after the shared MoE constants exist.
+    l1_before, _ = l1_per_bank()
+    sd2 = layer_state_dict(4, _use_real())  # layer 4: conv_moe
+    keep.append(make_multichip(sd2, cfg, args, 4, mesh_device, ctx))
+    del sd2
+    rec["conv_moe_second_layer_l1_bytes_per_bank"] = l1_per_bank()[0] - l1_before
+    built = l1_per_bank()[0] - l1_base  # conv_dense + 2 conv_moe + attn_moe, incl. everything shared once per device
+    # the layers not built add their per-layer delta (conv_dense: assumed 0 beyond the shared buffers its first instance
+    # allocated -- its delta is the all-reduce scratch pair + ShortConv constants, ASSUMPTION recorded)
+    rec["l1_stack_estimate_per_bank"] = (
+        built
+        + (n_conv_moe - 2) * rec["conv_moe_second_layer_l1_bytes_per_bank"]
+        + (n_attn - 1) * rec["attn_moe_layer_l1_bytes_per_bank"]
+    )
+    rec["l1_after_four_layers_per_bank"] = l1_per_bank()[0] - l1_base
     rec["stack_bytes_per_chip_32x131072"] = stack
     rec["stack_fraction_of_dram"] = stack / total
     rec["baseline_allocated_before_layers"] = base
     for k, v in rec.items():
         logger.info(f"MEMORY {k}: {v / 2**30:.3f} GiB" if isinstance(v, int) and v > 2**20 else f"MEMORY {k}: {v}")
-    out = os.path.join(os.path.dirname(__file__), "..", "doc", "multichip_decoder", "sweeps", "memory_capacity.json")
+    out = os.environ.get("LFM2_MEMORY_JSON") or os.path.join(
+        os.path.dirname(__file__), "..", "doc", "optimized_multichip_decoder", "sweeps", "memory_capacity.json"
+    )
     with open(out, "w") as f:
         json.dump(rec, f, indent=1)
     assert stack < total, rec
@@ -521,7 +549,13 @@ def test_multichip_stacked_layers(mesh_device):
         u.tt_prefill = out
     resid_mem = decs[0][0].resid_mem
     assert all(d.resid_mem == resid_mem for d, _ in decs)
-    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq, slot_mask_width=decs[0][0].slot_mask_width)
+    inp = DecodeInputs(
+        mesh_device,
+        H,
+        layout.max_blocks_per_seq,
+        slot_mask_width=decs[0][0].slot_mask_width,
+        slot_mask_mem=decs[0][0].slot_mask_mem,
+    )
     x_res = ttnn.to_memory_config(inp.x, resid_mem)  # model entry: the only conversion
 
     def step(x, check_layout=False):

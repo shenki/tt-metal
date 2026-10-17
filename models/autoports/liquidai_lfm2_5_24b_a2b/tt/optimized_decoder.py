@@ -163,6 +163,18 @@ class Policy:
     # (operator-norm input layout = out-proj output layout = ffn-norm input layout), h = x + attn is
     # a sharded add consumed by the sharded ffn norm (no S2I + DRAM add + I2S); MoE ffn only
     attn_residual_sharded: bool = False
+    # attn_pad_free concat output kept as a persistent L1 buffer per (bucket rows, layout) instead of a per-call
+    # copy of DRAM zeros: rows >= b of a bucket's buffer are never written, so they stay 0 (stage 5)
+    attn_concat_persistent: bool = False
+    # (max_bucket, (grid_x, grid_y, in0_block_w, out_subblock_w)): decode down-projection config of the 64-wide expert
+    # path for static buckets <= max_bucket (fewer active experts than the b32 tuning point); None = moe_down_cfg
+    moe_down_small_bucket_cfg: tuple = None
+    # compact decode experts: apply the per-slot routing weight to the [n, 32, I] activation before the down projection
+    # (linear, so only the rounding order changes) instead of to the [n, 32, H] output (H / I x fewer elements)
+    moe_compact_weight_before_down: bool = False
+    # compact decode experts: the expert-sum reduction writes straight into this width-sharded layout (multichip:
+    # the all-reduce / residual layout) instead of L1 interleaved; set by the decoder that owns the layout
+    moe_compact_out_sharded: bool = False
 
     def summary(self):
         return {k: getattr(self, k) for k in self.__dataclass_fields__}
@@ -482,6 +494,7 @@ def _add_residual(out, residual, policy=None):
 
 
 _ZERO_ROWS = {}  # (device id, rows, NH*HD) -> (device, DRAM zeros [1, 1, rows, NH*HD]) shared by all layers
+_CONCAT_BUFS = {}  # (device id, B, NH*HD, rows, layout) -> (device, persistent zeroed L1 concat output)
 
 
 class OptimizedAttention(FusedAttention):
@@ -627,6 +640,16 @@ class OptimizedAttention(FusedAttention):
             hit = _ZERO_ROWS[key] = (self.mesh_device, t)
         return ttnn.to_memory_config(hit[1], mem)
 
+    def _persistent_concat_buf(self, mem, rows):
+        """Persistent zero-initialized L1 concat output for ``rows`` written rows (Policy.attn_concat_persistent);
+        shared by the layers of a device, one per (rows, layout); allocated on first use (warm every bucket
+        before trace capture, as for the other lazy per-device caches)."""
+        key = (id(self.mesh_device), self.B, self.NH * self.HD, rows, repr(mem))
+        hit = _CONCAT_BUFS.get(key)
+        if hit is None or hit[0] is not self.mesh_device:
+            hit = _CONCAT_BUFS[key] = (self.mesh_device, self._concat_out_buf(mem))
+        return hit[1]
+
     def _bucket_mems(self, b):
         """Per-bucket b-user layouts: q/k/v heads (SDPA grid width), V for the fused KV update."""
         mems = self._bmems.get(b)
@@ -698,7 +721,9 @@ class OptimizedAttention(FusedAttention):
         ttnn.deallocate(attn)
         on_wo_grid = self.ds_wo is not None and self.ds_wo.in_mem == self._concat_mem()
         cmem = self.ds_wo.in_mem if on_wo_grid else self._concat_mem()
-        if rows < B:
+        if p.attn_concat_persistent:
+            buf = self._persistent_concat_buf(cmem, rows)
+        elif rows < B:
             buf = self._concat_out_buf(cmem)
         else:  # every row is written
             buf = ttnn.empty((1, 1, B, NH * HD), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.mesh_device, cmem)
@@ -710,11 +735,13 @@ class OptimizedAttention(FusedAttention):
             ttnn.deallocate(o)
         elif residual is not None and residual.is_sharded():
             out = self.ds_wo.decode_sharded(buf, self.ckc)  # sharded -> sharded reshard in
-            ttnn.deallocate(buf)
+            if not p.attn_concat_persistent:
+                ttnn.deallocate(buf)
             return self._sharded_residual_add(out, residual)
         else:
             out = self.ds_wo.decode(buf, self.ckc, DRAM)  # sharded -> sharded reshard (none on the wo grid)
-        ttnn.deallocate(buf)
+        if not p.attn_concat_persistent:
+            ttnn.deallocate(buf)
         return _add_residual(out, residual, p)
 
     def _sharded_residual_add(self, out, residual):

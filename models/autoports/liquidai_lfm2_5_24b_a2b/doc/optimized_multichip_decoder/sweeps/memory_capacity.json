@@ -1,0 +1,24 @@
+{
+ "dram_bytes_per_chip": 34078067712,
+ "l1_bytes_per_bank": 1436544,
+ "conv_dense_layer_bytes": 44294144,
+ "conv_dense_layer_l1_bytes_per_bank": 133376,
+ "conv_moe_layer_bytes": 336828416,
+ "conv_moe_layer_l1_bytes_per_bank": 26624,
+ "attn_moe_layer_bytes": 401399296,
+ "attn_moe_layer_l1_bytes_per_bank": 0,
+ "kv_cache_bytes_per_attention_layer_32x131072": 1140868096,
+ "kv_blocks": 65537,
+ "rope_tables_included_in_attn_layer": true,
+ "layer_counts": {
+  "conv_dense": 2,
+  "conv_moe": 28,
+  "attn_moe": 10
+ },
+ "conv_moe_second_layer_l1_bytes_per_bank": 0,
+ "l1_stack_estimate_per_bank": 160000,
+ "l1_after_four_layers_per_bank": 160000,
+ "stack_bytes_per_chip_32x131072": 24942457856,
+ "stack_fraction_of_dram": 0.7319211308221254,
+ "baseline_allocated_before_layers": 0
+}

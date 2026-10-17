@@ -1,0 +1,3 @@
+stage4 active=8 bucket=8 policy_override={}
+generated/profiler/reports/2026_10_17_12_36_09/ops_perf_results_2026_10_17_12_36_09.csv
+343a25a6 worktree d41d8cd98f00
