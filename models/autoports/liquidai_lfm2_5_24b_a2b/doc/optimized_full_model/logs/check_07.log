@@ -1,0 +1,4 @@
+measured: tt free-running completion [models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 143, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.042}
+measured: hf/tt token agreement (informational) [models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/autoregressive_meta.json] {'matching_tokens': 1, 'compared_tokens': 174}
+
+No degenerate output detected.

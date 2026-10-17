@@ -1,0 +1,67 @@
+{
+ "workload": "batch 1, prompt 128 / generate 128, greedy (TTFT also at 1024 / 2048 / 4100)",
+ "ttft_ms": 65.4,
+ "ttft_ms_by_prompt_len": {
+  "128": 65.8,
+  "1024": 97.5,
+  "2048": 134.9,
+  "4100": 296.6
+ },
+ "first_request_ttft_ms_incl_deferred_captures": 558.6,
+ "decode_token_out_ms": 9.356,
+ "decode_token_out_tok_s_u": 106.88,
+ "decode_teacher_forcing_ms": 9.801,
+ "logits_only_trace_ms": 9.146,
+ "batch_token_out_ms": {
+  "1": 9.35,
+  "4": 13.75,
+  "8": 19.2,
+  "32": 26.2
+ },
+ "lower_bound": {
+  "1": {
+   "stack_ms": 8.134,
+   "terminal_ms": 0.485,
+   "lower_bound_ms": 8.619,
+   "measured_token_out_ms": 9.348,
+   "over_lower_bound_pct": 8.5
+  },
+  "4": {
+   "stack_ms": 12.886,
+   "terminal_ms": 0.485,
+   "lower_bound_ms": 13.37,
+   "measured_token_out_ms": 13.75,
+   "over_lower_bound_pct": 2.8
+  },
+  "8": {
+   "stack_ms": 18.005,
+   "terminal_ms": 0.49,
+   "lower_bound_ms": 18.495,
+   "measured_token_out_ms": 19.199,
+   "over_lower_bound_pct": 3.8
+  },
+  "32": {
+   "stack_ms": 25.995,
+   "terminal_ms": 0.49,
+   "lower_bound_ms": 26.485,
+   "measured_token_out_ms": 26.204,
+   "over_lower_bound_pct": -1.1
+  }
+ },
+ "roofline_note": "b1 token reads ~693 MB / chip -> 1.35 ms at 512 GB/s vs 8.62 ms device / 9.36 ms e2e: latency / op-count bound (~1,850 device ops per 40-layer step, 80 all-reduces)",
+ "named_limitations": [
+  "80 x all_reduce_async per step (stage 5)",
+  "LM head DRAM-bound 168.9 us (bfp8 70 MB/chip; dtype is a datatype-sweep item)",
+  "sampler top-k 99 us on one [32, 32768] tile row per chip",
+  "ManualSeed 17.7 + Sampling 21.8 us (+ dispatch gap)",
+  "prefill MoE expert FFN ~874 us per MoE layer at 128 rows (op level)",
+  "TTFT(128) 65 ms vs ~55-60 ms device: per-chunk input refresh + prefill sampling + readback"
+ ],
+ "source": "doc/optimized_full_model/logs/final_r2.json; probe Tracy perf/tracy_probe/; stage-5 per-layer latencies doc/optimized_multichip_decoder/README.md",
+ "decode_ms_per_token_e2e": 9.356,
+ "decode_ms_per_token_device": 8.619,
+ "decode_ms_per_token_device_note": "40-layer device time = stage-5 per-layer device latencies x counts (cos/sin + slices once) + probe-Tracy terminal work (no Tracy on 40 layers)",
+ "roofline_ms_per_token_estimate": 1.354,
+ "roofline_bytes_per_chip_per_token": 693237760.0,
+ "roofline_source": "repro/roofline.py -> perf/roofline_b1.json (512 GB/s, tt-perf-report Blackhole)"
+}

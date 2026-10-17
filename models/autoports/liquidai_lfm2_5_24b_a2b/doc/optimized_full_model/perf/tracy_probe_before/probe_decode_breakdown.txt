@@ -1,0 +1,11 @@
+probe token-out step (layers 0,2,3 + embedding + final norm + LM head + split sampling, pad_logits_to_power_of_2), mean of 5 replays:
+  device 1070.4 us, op-to-op gaps 163.9 us, 171 ops
+  embedding + entry reshard + cos/sin: device 21.9 us, gaps 10.2 us
+     Embeddings 10.9, InterleavedToSharded 1.9, Slice 1.0, Embeddings 1.1, TilizeWithValPadding 3.2, Transpose 2.1, InterleavedToSharded 0.5, Embeddings 1.1
+  final norm + LM head: device 186.0 us, gaps 1.7 us
+     LayerNorm 6.8, Reshard 1.5, Matmul 32 x 2048 x 32256 169.4, ShardedToInterleaved 8.3
+  position advance (plus_one x2): device 1.9 us, gaps 2.2 us
+     PlusOne 0.9, PlusOne 0.9
+  sampling trace: device 287.5 us, gaps 57.9 us
+     Slice 12.2, Slice 1.3, BinaryNg 2.7, Concat 11.8, Pad 16.8, TopK 124.3, AllGather 7.9, AllGather 7.7, Typecast 1.9, BinaryNg 3.0, Untilize 4.3, Reduce 1.5, BinaryNg 3.3, BinaryNg 3.2, Unary 2.3, BinaryNg 3.7, BinaryNg 3.1, Typecast 1.9, BinaryNg 3.6, Typecast 2.2, BinaryNg 3.0, Reduce 2.7, BinaryNg 7.2, Typecast 2.0, BinaryNg 3.2, BinaryNg 3.4, BinaryNg 3.3, BinaryNg 2.4, ManualSeed 18.8, Sampling 21.8, PlusOne 0.9
+  decoder layers 0,2,3: device 573.2 us (stage-5 per-layer b1: 137.0 + 235.5 + 195.2 = 567.7)

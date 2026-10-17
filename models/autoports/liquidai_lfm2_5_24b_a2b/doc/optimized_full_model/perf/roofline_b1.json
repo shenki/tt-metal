@@ -1,0 +1,17 @@
+{
+ "position": 192,
+ "bytes_per_chip": {
+  "attn_moe_layer": 13913088.0,
+  "conv_moe_layer": 15532032.0,
+  "conv_dense_layer": 24510464.0,
+  "lm_head": 70189056.0,
+  "total": 693237760.0
+ },
+ "layer_counts": {
+  "attn_moe": 10,
+  "conv_moe": 28,
+  "conv_dense": 2
+ },
+ "dram_gb_s": 512,
+ "roofline_ms_per_token": 1.35398
+}

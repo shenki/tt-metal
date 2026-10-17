@@ -375,6 +375,106 @@ def test_prefill_continuation_interleaved(env):
 
 
 # ------------------------------------------------------------------------------------------------
+# traced prefill: bitwise equal to the eager path; one capture per (bucket, first/continuation, head) key
+# ------------------------------------------------------------------------------------------------
+def _prefill_state(gen, ids, slot, traced):
+    gen.reset()
+    gen.traced_prefill = traced
+    try:
+        tok = gen.prefill_forward(
+            torch.tensor(ids).reshape(1, -1),
+            page_table=gen.slot_table[slot : slot + 1],
+            prompt_lens=[len(ids)],
+            slots=[slot],
+        )
+    finally:
+        gen.traced_prefill = True
+    logits = gen.model.logits_to_host(gen.pf_logits)[0, 0]
+    conv = [ttnn.to_torch(s, mesh_composer=ttnn.ConcatMeshToTensor(gen.mesh, dim=0)) for s in gen.model.conv_states()]
+    k0 = gen.model.kv[0][0]
+    blocks = gen.slot_table[slot, : (len(ids) + 63) // 64].long()
+    kv = ttnn.to_torch(k0, mesh_composer=ttnn.ConcatMeshToTensor(gen.mesh, dim=0)).reshape(4, *k0.shape)[:, blocks]
+    return int(tok[0]), logits, conv, kv
+
+
+@pytest.mark.parametrize("n", [1, 33, 300, 2049, 4100])
+def test_prefill_traced_vs_eager(env, n):
+    gen, _ = env
+    ids = text_ids(gen, n, 5)
+    c0 = dict(gen.counters)
+    t_tok, t_lg, t_conv, t_kv = _prefill_state(gen, ids, 2, traced=True)
+    d = counters_delta(gen, c0)
+    assert d.get("prefill_replays", 0) == (n + 2047) // 2048 and d.get("prefill_eager_chunks", 0) == 0, d
+    e_tok, e_lg, e_conv, e_kv = _prefill_state(gen, ids, 2, traced=False)
+    assert t_tok == e_tok and torch.equal(t_lg, e_lg), (t_tok, e_tok)
+    assert all(torch.equal(a, b) for a, b in zip(t_conv, e_conv)), "ShortConv state differs traced vs eager"
+    assert torch.equal(t_kv, e_kv), "KV blocks differ traced vs eager"
+
+
+def test_prefill_trace_reuse(env):
+    """Prompt lengths / slots / page-table rows / continuation starts change only runtime inputs: each key is captured
+    at most once, no trace is released, decode replays in between keep working."""
+    gen, ref = env
+    keys0 = dict(gen.prefill_traces)
+    caps0 = gen.counters["prefill_trace_captures"]
+    gen.reset()
+    gen._refresh_table(gen.slot_table)
+    for n, slot in ((31, 0), (33, 1), (31, 4), (20, 9)):  # bucket 32 except 33 -> 64
+        _start(gen, slot, text_ids(gen, n, slot))
+        gen.decode_forward(read_from_device=False)
+    added = gen.counters["prefill_trace_captures"] - caps0
+    new = set(gen.prefill_traces) - set(keys0)
+    assert added == len(new) and new <= {(32, False, "last"), (64, False, "last")}, (added, new)
+    assert all(gen.prefill_traces[k] == v for k, v in keys0.items()), "a prefill trace was replaced"
+    # two sequences in one call: both first tokens through one prefill-sampling replay
+    ids_a, ids_b = text_ids(gen, 40, 3), text_ids(gen, 70, 8)
+    toks = torch.zeros(2, 70, dtype=torch.int64)
+    toks[0, :40], toks[1] = torch.tensor(ids_a), torch.tensor(ids_b)
+    gen.reset()
+    first = gen.prefill_forward(toks, page_table=gen.slot_table[[5, 6]], prompt_lens=[40, 70], slots=[5, 6])
+    for i, ids in ((0, ids_a), (1, ids_b)):
+        assert int(first[i]) in ref.logits(torch.tensor(ids))[-1].topk(5).indices.tolist()
+    caps1 = gen.counters["prefill_trace_captures"]
+    for start in (2048, 4096):  # continuation chunks at different starts reuse one key
+        gen.prefill_forward(
+            torch.tensor(text_ids(gen, 100, 1)).reshape(1, -1),
+            page_table=gen.slot_table[7:8],
+            prompt_lens=[100],
+            slots=[7],
+            start_pos=[start],
+        )
+    assert gen.counters["prefill_trace_captures"] - caps1 <= 1
+
+
+def test_prefill_allocation_free(env):
+    """After its keys are captured, a traced prefill only refreshes the persistent inputs (host copies) and replays:
+    no device tensor is created from the host (device-bound ``from_torch``) between replays."""
+    gen, _ = env
+    lens = (33, 2049)
+    for n in lens:  # make sure the keys exist
+        gen.reset()
+        gen.generate(text_ids(gen, n, 2), 1, stop_on_eos=False)
+    orig = ttnn.from_torch
+
+    def guarded(*a, **k):
+        assert k.get("device") is None, "device allocation from host inside the traced prefill path"
+        return orig(*a, **k)
+
+    caps = gen.counters["prefill_trace_captures"]
+    ttnn.from_torch = guarded
+    try:
+        for n in lens:
+            gen.reset()
+            ids = text_ids(gen, n, 2)
+            gen.prefill_forward(
+                torch.tensor(ids).reshape(1, -1), page_table=gen.slot_table[:1], prompt_lens=[n], slots=[0]
+            )
+    finally:
+        ttnn.from_torch = orig
+    assert gen.counters["prefill_trace_captures"] == caps
+
+
+# ------------------------------------------------------------------------------------------------
 # determinism, no host transfer in the steady-state loop, host-sampling compatibility
 # ------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("b", [1, 32])

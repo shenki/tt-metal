@@ -1,0 +1,2 @@
+TOPK stable=False: 124.2 us/call; tied maxima at top-3 [100, 7000, 20000], top-1 per row [100, 100, 100, 100]
+TOPK stable=True: 99.5 us/call; tied maxima at top-3 [100, 7000, 20000], top-1 per row [100, 100, 100, 100]

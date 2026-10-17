@@ -1,0 +1,328 @@
+2026-10-17 22:57:17.056 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, github-actions-annotate-failures-0.3.0, anyio-4.15.1, dash-2.15.0, cov-7.0.0, split-0.11.0, repeat-0.9.4, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 28 items
+
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture 2026-10-17 22:57:18.178 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:env:34 - TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+2026-10-17 22:57:18.178 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-17 22:57:18.178 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-10-17 22:57:18.179 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-17 22:57:18.179 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-17 22:57:18.193 | info     |             UMD | Established firmware bundle version: 19.15.0 (topology_discovery.cpp:654)
+2026-10-17 22:57:18.194 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-17 22:57:18.262 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:176)
+2026-10-17 22:57:18.262 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-10-17 22:57:18.262 | info     |             UMD | KMD version: 2.11.0 (cluster.cpp:153)
+2026-10-17 22:57:18.262 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-10-17 22:57:18.265 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-10-17 22:57:18.369 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-10-17 22:57:18.370 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-10-17 22:57:18.370 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-10-17 22:57:18.370 | info     |          Fabric | Loaded physical groupings from: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-17 22:57:18.371 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-17 22:57:18.371 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-10-17 22:57:18.371 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-10-17 22:57:18.371 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-10-17 22:57:18.371 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-10-17 22:57:18.458 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-17 22:57:18.513 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-17 22:57:18.513 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files: 100%|██████████| 6/6 [00:00<00:00, 54947.21it/s]
+2026-10-17 22:57:21.578 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/globals/0000_128000x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([128000, 2048])
+2026-10-17 22:57:22.099 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/globals/0001_2048x32256_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 32256])
+2026-10-17 22:57:22.131 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/globals/0002_2048x129024_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 32256])
+2026-10-17 22:57:22.337 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/rope/0000_131072x64_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([131072, 64])
+2026-10-17 22:57:22.340 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/rope/0001_131072x64_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([131072, 64])
+2026-10-17 22:57:22.343 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/rope/0002_1x1x131072x64_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 131072, 64])
+2026-10-17 22:57:22.345 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/rope/0003_1x1x131072x64_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 131072, 64])
+2026-10-17 22:57:22.417 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0000_2048x1536_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:22.421 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0001_512x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:22.436 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0002_2048x1536_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:22.438 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0003_512x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:22.460 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0004_2048x6144_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:22.468 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0005_2048x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:22.470 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0006_1x1x32x2048_CppTensorToMesh_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 32, 512])
+2026-10-17 22:57:22.470 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0007_1x1x32x2048_CppTensorToMesh_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 32, 512])
+2026-10-17 22:57:22.470 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0008_1x1x32x2048_CppTensorToMesh_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 32, 512])
+2026-10-17 22:57:22.487 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0009_2048x2944_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 2944])
+2026-10-17 22:57:22.494 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0010_2048x2944_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 2944])
+2026-10-17 22:57:22.502 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0011_2944x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2944, 2048])
+2026-10-17 22:57:22.505 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0012_2944x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2944, 2048])
+2026-10-17 22:57:22.510 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0013_2048x3072_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 3072])
+2026-10-17 22:57:22.514 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0014_2048x3072_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 3072])
+2026-10-17 22:57:22.517 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0015_3072x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([3072, 2048])
+2026-10-17 22:57:22.554 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0016_2048x11776_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 2944])
+2026-10-17 22:57:22.590 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0017_2048x11776_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 2944])
+2026-10-17 22:57:22.603 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0018_11776x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2944, 2048])
+2026-10-17 22:57:22.627 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0019_2048x12288_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 3072])
+2026-10-17 22:57:22.654 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0020_2048x12288_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 3072])
+2026-10-17 22:57:22.670 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0021_12288x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([3072, 2048])
+2026-10-17 22:57:22.714 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0022_2048x6144_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 6144])
+2026-10-17 22:57:22.722 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L00/0023_2048x24576_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 6144])
+2026-10-17 22:57:22.778 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0000_2048x768_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 768])
+2026-10-17 22:57:22.781 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0001_512x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:22.788 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0002_2048x768_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 768])
+2026-10-17 22:57:22.789 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0003_512x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:22.797 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0004_2048x3072_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 768])
+2026-10-17 22:57:22.800 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0005_2048x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:22.801 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0006_2048x64_ReplicateTensorToMeshWrapper_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([2048, 64])
+2026-10-17 22:57:22.886 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0007_1x64x2048x768_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 2048, 768])
+2026-10-17 22:57:22.898 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0008_1x64x384x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 384, 2048])
+2026-10-17 22:57:23.064 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0009_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.083 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0010_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.101 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0011_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.119 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0012_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.136 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0013_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.154 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0014_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.171 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0015_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.189 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0016_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.208 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0017_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.226 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0018_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.245 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0019_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.263 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0020_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.283 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0021_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.302 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0022_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.321 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0023_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.341 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0024_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.360 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0025_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.380 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0026_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.399 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0027_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.419 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0028_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.440 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0029_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.459 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0030_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.479 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0031_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.500 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0032_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.520 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0033_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.541 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0034_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.561 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0035_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.581 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0036_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.602 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0037_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.621 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0038_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.642 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0039_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.662 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0040_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:23.683 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0041_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.704 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0042_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.725 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0043_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.747 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0044_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.768 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0045_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.789 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0046_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.810 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0047_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.831 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0048_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.852 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0049_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.872 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0050_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.892 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0051_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.912 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0052_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.933 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0053_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.953 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0054_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.972 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0055_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.993 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0056_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:23.995 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0057_1536x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:24.017 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0058_32x9184_ReplicateTensorToMeshWrapper_dtype_FLOAT32_layout_ROW_MAJOR.tensorbin of shape Shape([32, 9184])
+2026-10-17 22:57:24.018 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0059_1x256x32x32_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 256, 32, 32])
+2026-10-17 22:57:24.018 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0060_256x256_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([256, 256])
+2026-10-17 22:57:24.145 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0061_2048x64_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([2048, 64])
+2026-10-17 22:57:24.146 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0062_2048x256_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([2048, 256])
+2026-10-17 22:57:24.636 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0063_1x64x2048x3072_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 2048, 768])
+2026-10-17 22:57:24.868 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L02/0064_1x64x1536x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 384, 2048])
+2026-10-17 22:57:25.087 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0000_2048x1536_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.091 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0001_512x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:25.096 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0002_2048x1536_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.098 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0003_512x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:25.113 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0004_2048x6144_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.118 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0005_2048x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([512, 2048])
+2026-10-17 22:57:25.120 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0006_1x1x32x2048_CppTensorToMesh_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 32, 512])
+2026-10-17 22:57:25.120 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0007_1x1x32x2048_CppTensorToMesh_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 32, 512])
+2026-10-17 22:57:25.121 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0008_1x1x32x2048_CppTensorToMesh_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 32, 512])
+2026-10-17 22:57:25.121 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0009_2048x64_ReplicateTensorToMeshWrapper_dtype_FLOAT32_layout_TILE.tensorbin of shape Shape([2048, 64])
+2026-10-17 22:57:25.224 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0010_1x64x2048x768_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 2048, 768])
+2026-10-17 22:57:25.237 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0011_1x64x384x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 384, 2048])
+2026-10-17 22:57:25.390 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0012_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.409 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0013_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.430 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0014_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.449 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0015_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.465 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0016_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.483 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0017_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.500 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0018_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.518 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0019_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.535 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0020_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.553 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0021_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.572 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0022_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.591 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0023_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.610 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0024_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.627 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0025_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.644 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0026_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.663 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0027_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.680 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0028_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.698 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0029_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.715 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0030_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.732 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0031_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.749 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0032_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.766 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0033_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.784 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0034_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.801 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0035_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.819 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0036_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.836 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0037_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.853 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0038_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.870 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0039_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.887 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0040_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.904 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0041_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.921 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0042_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.938 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0043_8192x1536_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([2048, 1536])
+2026-10-17 22:57:25.956 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0044_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:25.974 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0045_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:25.992 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0046_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.011 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0047_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.029 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0048_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.048 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0049_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.067 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0050_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.085 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0051_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.104 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0052_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.122 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0053_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.140 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0054_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.159 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0055_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.177 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0056_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.195 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0057_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.214 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0058_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.232 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0059_6144x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.234 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0060_1536x2048_ReplicateTensorToMeshWrapper_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 2048])
+2026-10-17 22:57:26.236 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0061_32x9184_ReplicateTensorToMeshWrapper_dtype_FLOAT32_layout_ROW_MAJOR.tensorbin of shape Shape([32, 9184])
+2026-10-17 22:57:26.237 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0062_1x256x32x32_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 256, 32, 32])
+2026-10-17 22:57:26.237 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0063_256x256_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([256, 256])
+2026-10-17 22:57:26.350 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0064_2048x64_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([2048, 64])
+2026-10-17 22:57:26.351 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0065_2048x256_ReplicateTensorToMeshWrapper_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([2048, 256])
+2026-10-17 22:57:26.757 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0066_1x64x2048x3072_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 2048, 768])
+2026-10-17 22:57:26.984 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0067_1x64x1536x2048_CppTensorToMesh_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 64, 384, 2048])
+2026-10-17 22:57:27.170 | DEBUG    | core:as_tensor:933 - Loaded cache for /home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705/L03/0068_32x2048_ReplicateTensorToMeshWrapper_dtype_INT32_layout_ROW_MAJOR.tensorbin of shape Shape([32, 2048])
+2026-10-17 22:57:27.176 | INFO     | models.autoports.liquidai_lfm2_5_24b_a2b.tt.model:__init__:165 - Lfm2Model: 3 layers (0, 2, 3), build 3.1 s globals/head + 4.9 s layers, weight cache {'dir': '/home/ttuser/.cache/tt_autoport_weights/lfm2_5_24b_a2b/be7c7333ce40f15ea705', 'hits': 165, 'misses': 0, 'bypassed': 90}
+2026-10-17 22:57:39.072 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tt.generator:prepare:335 - Lfm2Generator.prepare: 4.0 s
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_serving_row_semantics PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_split_sampling_trace 2026-10-17 22:57:42.173 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_split_sampling_trace:193 - replay-1 logits top5 [(91, 15.125), (12164, 9.438), (25685, 8.688), (3011, 8.5), (10442, 8.312)]; k/p/temp rows0: [32, 1] [1.0, 0.0] [0.050048828125, 1.0]
+2026-10-17 22:57:42.720 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_split_sampling_trace:223 - feedback: first 91 forced 91 t1 10442 t2 10442; counters {'model_replays': 1, 'sampling_replays': 1}
+2026-10-17 22:57:43.036 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_split_sampling_trace:261 - captures: before 8 after 8, traces [1, 4]
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[bucket2] 2026-10-17 22:57:43.980 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_batch_decode:309 - batch 2: TT tokens vs HF probe top1 18/18 top5 18/18
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b2_hole] 2026-10-17 22:57:44.899 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_batch_decode:309 - batch 2: TT tokens vs HF probe top1 18/18 top5 18/18
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b8] 2026-10-17 22:57:48.406 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_batch_decode:309 - batch 8: TT tokens vs HF probe top1 72/72 top5 72/72
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b32] 2026-10-17 22:58:01.785 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_batch_decode:309 - batch 32: TT tokens vs HF probe top1 287/288 top5 288/288
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[1] 2026-10-17 22:58:02.204 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=1: PCC 0.99858 top1 0.000
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[31] 2026-10-17 22:58:02.890 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=31: PCC 0.99775 top1 0.903
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[33] 2026-10-17 22:58:03.620 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=33: PCC 0.99782 top1 0.909
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[65] 2026-10-17 22:58:05.847 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=65: PCC 0.99713 top1 0.923
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[77] 2026-10-17 22:58:06.847 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=77: PCC 0.99695 top1 0.935
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[300] 2026-10-17 22:58:09.363 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=300: PCC 0.99751 top1 0.943
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[2047] 2026-10-17 22:58:19.429 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=2047: PCC 0.99750 top1 0.943
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[2049] 2026-10-17 22:58:30.736 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=2049: PCC 0.99750 top1 0.943
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[4100] 2026-10-17 22:59:04.048 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_prefill_lengths:327 - prefill_logits n=4100: PCC 0.99757 top1 0.946
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_continuation_interleaved PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[1] PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[33] PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[300] PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049] PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[4100] PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_trace_reuse PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_allocation_free PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_determinism_no_fallback[1] PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_determinism_no_fallback[32] PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_host_sampling_compat PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_full_context 2026-10-17 23:01:27.062 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:test_full_context:536 - full context 131069 + 3: tokens [7236, 7236, 7236] (host argmax [7236, 7236, 7236]); counters {'history_cursor_refreshes': 2, 'prefill_input_refreshes': 1408, 'prefill_replays': 127, 'prefill_chunks': 128, 'prefill_sampling_replays': 1, 'token_readbacks': 1, 'position_refreshes': 3, 'rope_refreshes': 3, 'mask_refreshes': 6, 'token_refreshes': 5, 'model_replays': 4, 'sampling_replays': 2, 'history_appends': 2, 'history_readbacks': 1, 'seed_refreshes': 1, 'resets': 1, 'prefill_eager_chunks': 1, 'full_logits_readbacks': 3}
+2026-10-17 23:01:27.062 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="exceeds max_seq_len"
+2026-10-17 23:01:27.070 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="exceeds max_seq_len"
+PASSED
+
+=============================== warnings summary ===============================
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+46.02s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[4100]
+23.98s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[2049]
+22.69s setup    models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+18.73s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049]
+18.64s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[300]
+18.59s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[1]
+18.47s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[4100]
+18.44s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[33]
+13.16s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b32]
+12.61s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_continuation_interleaved
+9.99s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[2047]
+4.26s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_full_context
+3.30s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b8]
+2.96s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_host_sampling_compat
+2.32s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[300]
+1.76s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[33]
+1.36s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_split_sampling_trace
+0.87s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_trace_reuse
+0.78s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[77]
+0.77s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[65]
+0.72s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[bucket2]
+0.70s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b2_hole]
+0.58s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_determinism_no_fallback[32]
+0.44s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[31]
+0.26s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_serving_row_semantics
+=========================== short test summary info ============================
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_serving_row_semantics
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_split_sampling_trace
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[bucket2]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b2_hole]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b8]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_batch_decode[b32]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[1]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[31]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[33]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[65]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[77]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[300]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[2047]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[2049]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_lengths[4100]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_continuation_interleaved
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[1]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[33]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[300]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[4100]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_trace_reuse
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_allocation_free
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_determinism_no_fallback[1]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_determinism_no_fallback[32]
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_host_sampling_compat
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_full_context
+================== 28 passed, 2 warnings in 249.00s (0:04:09) ==================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-17 23:01:29.794 | info     |    BuildKernels | JIT cache stats: 1801/1801 hits (100.0%) [1801 cached, 1478 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-17 23:01:29.794 | info     |    BuildKernels | JIT telemetry: 33 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-17 23:01:29.840 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-17 23:01:29.840 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-10-17 23:01:30.016 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-10-17 23:01:30.016 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-10-17 23:01:30.016 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)

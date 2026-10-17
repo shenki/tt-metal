@@ -225,5 +225,48 @@
     "prefill_chunking": "chunks of 2048 at 2048-aligned starts, last chunk padded to the next physical bucket by the generator; logits sliced to the logical length",
     "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/full_model/logs/test_full_model_tracker_r2.log",
     "all_layer_runs": "doc/full_model/logs/final_r2.json (final code: readiness prefill / teacher forcing / autoregressive / qualitative / perf); memory figures from doc/full_model/logs/final_all_runs.json (measured with buckets 1/4/8/32 captured)"
+  },
+  "optimized_full_model": {
+    "current_supported_context": 131072,
+    "capability_reduction": null,
+    "decode_batch": 32,
+    "kv_layout_change": null,
+    "measured_per_chip_gib": {
+      "dram_capacity_with_768mib_trace_region": 31.081,
+      "dram_allocated_full_model_32x131072_kv": 23.22,
+      "trace_region_size": 0.75,
+      "trace_region_used_after_perf_run": 0.301
+    },
+    "persistent_l1_bytes_per_core": 189696,
+    "persistent_allocation_changes": [
+      "trace region 256 -> 768 MiB per chip (prefill traces: 2.1-4.3 MB per bank each; 16 reachable prefill keys + 18 decode/sampling traces; 256 MiB overflowed at the batch-32 capture: logs/allayer_p1_perf.log first attempt)",
+      "persistent per-bucket prefill inputs (ids, positions, page-table row, chunk block row, chunk start, ShortConv selections, last-row selector) for buckets 32..2048: < 2 MB per chip",
+      "one extra sampling+history trace per captured decode bucket (trace region only)",
+      "weight cache is host-side (~/.cache/tt_autoport_weights): no device change"
+    ],
+    "measurement": "tests/readiness_driver.py --runs memory -> doc/optimized_full_model/logs/final_r2.json (memory run before perf: bucket-1 traces captured); trace usage after the perf run from perf.trace_region_used",
+    "largest_prefill_tested": 131069,
+    "largest_decode_position_tested": 131071,
+    "full_context_test": "tests/test_full_model.py::test_full_context (traced prefill, 64 chunks; reduced probe)",
+    "non_aligned_lengths_tested": [
+      1,
+      31,
+      33,
+      65,
+      77,
+      300,
+      2047,
+      2049,
+      4100,
+      131069
+    ],
+    "traced_prefill_bitwise_vs_eager_lengths": [
+      1,
+      33,
+      300,
+      2049,
+      4100
+    ],
+    "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/optimized_full_model/logs/test_full_model_tracker_r2.log"
   }
 }

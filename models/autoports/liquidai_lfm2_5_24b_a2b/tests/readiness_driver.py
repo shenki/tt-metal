@@ -54,7 +54,7 @@ def main():
     ap.add_argument("--max-new-tokens", type=int, default=256)
     ap.add_argument("--ar-out", type=Path, default=MODEL_DIR / "readiness_autoregressive")
     ap.add_argument("--json", type=Path, default=None, help="write the results here")
-    ap.add_argument("--trace-region-mb", type=int, default=256)
+    ap.add_argument("--trace-region-mb", type=int, default=768)
     a = ap.parse_args()
 
     from readiness_check.run_autoregressive import DEFAULT_PROMPT_FILE, run_autoregressive

@@ -27,6 +27,7 @@ slot -> block mapping; serving callers bind their own cache / page table (``bind
 ``decode_forward`` with explicit slots, positions and page tables.
 """
 
+import contextlib
 import os
 import time
 from collections import Counter
@@ -63,7 +64,7 @@ def configure_fabric(payload_bytes=8192):
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
 
 
-def open_mesh(trace_region_size=256 << 20):
+def open_mesh(trace_region_size=768 << 20):
     """Open the 1x4 mesh with the parameters the model needs (CCL semaphores in L1_SMALL, trace region)."""
     from models.autoports.liquidai_lfm2_5_24b_a2b.tt.multichip_decoder import mesh_device_params
 
@@ -124,6 +125,10 @@ class Lfm2Generator(Generator):
         self.sampler = TTSampling(
             self.mesh, get_tt_ccl(self.mesh), args, k=self.k_host, p=self.p_host, temp=self.t_host
         )
+        # stable local top-k (TTSampling's own switch, `_topk_stable`; this [32, 32768] call is not on the routed
+        # large-index path): 99.5 vs 124.2 us per call on this shard (doc/optimized_full_model/logs/topk_stable_bench.log);
+        # the greedy tie-break pass is kept, so greedy exactness does not depend on it
+        self.sampler._topk_stable = os.environ.get("LFM2_STABLE_TOPK", "1") == "1"
         self._push_sampling_params()
         rm = ttnn.ROW_MAJOR_LAYOUT
         mk = lambda t_, dt, lay, mapper: ttnn.from_torch(
@@ -155,6 +160,9 @@ class Lfm2Generator(Generator):
         self.traces = {}  # bucket -> (model trace, logits, sampling trace)
         self.pf_sample_trace = None
         self.append_trace = None
+        self.prefill_traces = {}  # (bucket, continuation, out) -> trace id
+        self.sample_hist_traces = {}  # bucket -> sampling + history-append trace id
+        self.traced_prefill = os.environ.get("LFM2_EAGER_PREFILL") != "1"
 
     # ------------------------------------------------------------------------------------------
     # host -> device refresh helpers (request boundaries only)
@@ -278,6 +286,7 @@ class Lfm2Generator(Generator):
         assert self.kv is not None, "allocate or bind the cache first"
         m, st = self.model, self.model.state
         t0 = time.perf_counter()
+        m.alloc_prefill_inputs()  # persistent per-bucket prefill inputs: before any capture
         conv_backup = [ttnn.clone(s) for s in m.conv_states()]
         backup = [(ttnn.clone(t), t) for t in (st.tokens, st.cur_pos, st.rope_pos, self.sampler.seeds_tt_tensor)]
         zero_row = torch.zeros(m.max_blocks, dtype=torch.int32)  # every block -> scratch block 0
@@ -341,25 +350,32 @@ class Lfm2Generator(Generator):
         assert self.prepared
         ttnn.synchronize_device(self.mesh)
         t0 = time.perf_counter()
-        tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-        logits = self.model.decode_forward_device(bucket)
-        ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
-        # logits[bucket] is written by model trace b and read only by sampling trace b, replayed right after it with
-        # nothing in between; other traces may reuse its address as scratch (README "Trace allocation")
-        _acknowledge(logits)
-        sid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-        self._sample(logits, self.model.state.tokens)
-        ttnn.end_trace_capture(self.mesh, sid, cq_id=0)
-        self.traces[bucket] = (tid, logits, sid)
-        self.counters["trace_captures"] += 2
-        if self.pf_sample_trace is None:
-            self.pf_sample_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-            self._sample(self.pf_logits, self.pf_tokens)
-            ttnn.end_trace_capture(self.mesh, self.pf_sample_trace, cq_id=0)
-            self.append_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        with self._no_cache_misses():  # every capture below: a program-cache miss fails instead of compiling
+            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            logits = self.model.decode_forward_device(bucket)
+            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+            # logits[bucket] is written by model trace b and read only by sampling trace b, replayed right after it with
+            # nothing in between; other traces may reuse its address as scratch (README "Trace allocation")
+            _acknowledge(logits)
+            sid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._sample(logits, self.model.state.tokens)
+            ttnn.end_trace_capture(self.mesh, sid, cq_id=0)
+            # free-running variant: sampling + history append in one trace (one replay fewer per step)
+            sid_h = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._sample(logits, self.model.state.tokens)
             self._append_history()
-            ttnn.end_trace_capture(self.mesh, self.append_trace, cq_id=0)
-            self.counters["trace_captures"] += 2
+            ttnn.end_trace_capture(self.mesh, sid_h, cq_id=0)
+            self.traces[bucket] = (tid, logits, sid)
+            self.sample_hist_traces[bucket] = sid_h
+            self.counters["trace_captures"] += 3
+            if self.pf_sample_trace is None:
+                self.pf_sample_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                self._sample(self.pf_logits, self.pf_tokens)
+                ttnn.end_trace_capture(self.mesh, self.pf_sample_trace, cq_id=0)
+                self.append_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                self._append_history()
+                ttnn.end_trace_capture(self.mesh, self.append_trace, cq_id=0)
+                self.counters["trace_captures"] += 2
         self.last_perf.setdefault("capture_s", {})[str(bucket)] = time.perf_counter() - t0
 
     def _trace(self, bucket):
@@ -416,24 +432,14 @@ class Lfm2Generator(Generator):
                 c = min(PREFILL_CHUNK, n - done)
                 final = done + c == n
                 mode = "all" if return_all_logits else ("last" if final else "none")
-                lg = self.model.prefill_chunk(
-                    ids[done : done + c],
-                    chunk_start=pos + done,
-                    valid_len=c,
-                    slot=slots[b],
-                    page_table_row=row,
-                    out=mode,
-                )
+                lg = self._prefill_chunk(ids[done : done + c], pos + done, c, slots[b], row, mode, sample)
                 if mode == "all":
                     outs.append(self.model.logits_to_host(lg)[0, 0, :c])
                     self.counters["full_logits_readbacks"] += 1
                     ttnn.deallocate(lg)
-                elif mode == "last":
-                    if sample:
-                        ttnn.add(self.pf_logits, lg, output_tensor=self.pf_logits)  # rows of other slots are exactly 0
-                    else:
-                        last.append(self.model.logits_to_host(lg)[0, 0, slots[b]].reshape(1, -1))
-                        self.counters["full_logits_readbacks"] += 1
+                elif mode == "last" and not sample:
+                    last.append(self.model.logits_to_host(lg)[0, 0, slots[b]].reshape(1, -1))
+                    self.counters["full_logits_readbacks"] += 1
                     ttnn.deallocate(lg)
                 done += c
             self.counters["prefill_chunks"] += (n + PREFILL_CHUNK - 1) // PREFILL_CHUNK
@@ -453,6 +459,65 @@ class Lfm2Generator(Generator):
         self.counters["prefill_sampling_replays"] += 1
         toks = self._read_tokens(self.pf_tokens)
         return toks[slots]
+
+    def _prefill_chunk(self, ids, chunk_start, n, slot, row, mode, sample):
+        """One chunk: host refresh of the bucket's persistent inputs, then the traced chunk (non-blocking replay; the
+        sampled-mode last chunk accumulates its logits into ``pf_logits`` inside the trace) or the eager path (all-logits
+        readiness / host-compat / ``LFM2_EAGER_PREFILL=1``).  Returns device logits for the eager "all" / unsampled "last"
+        modes, else None."""
+        m = self.model
+        S, host = m.prefill_host_inputs(ids, chunk_start=chunk_start, valid_len=n, slot=slot, page_table_row=row)
+        self.counters["prefill_input_refreshes"] += m.load_prefill_inputs(S, host)
+        cont = chunk_start > 0
+        acc = self.pf_logits if (mode == "last" and sample) else None
+        if mode == "all" or (mode == "last" and not sample) or not self.traced_prefill:
+            self.counters["prefill_eager_chunks"] += 1
+            return m.prefill_chunk_device(S, continuation=cont, out=mode, accumulate_into=acc)
+        key = (S, cont, mode)
+        tid = self.prefill_traces.get(key)
+        if tid is None:
+            tid = self._capture_prefill(key)
+        ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=False)
+        self.counters["prefill_replays"] += 1
+        return None
+
+    def _capture_prefill(self, key):
+        """Capture the prefill trace of ``key = (bucket, continuation, out)`` once (every program was compiled by
+        ``prepare``; capture records without executing)."""
+        assert self.prepared
+        S, cont, mode = key
+        ttnn.synchronize_device(self.mesh)
+        t0 = time.perf_counter()
+        before = self._trace_bytes()
+        with self._no_cache_misses():
+            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self.model.prefill_chunk_device(
+                S, continuation=cont, out=mode, accumulate_into=self.pf_logits if mode == "last" else None
+            )
+            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+        self.prefill_traces[key] = tid
+        self.counters["prefill_trace_captures"] += 1
+        self.last_perf.setdefault("prefill_capture_s", {})[str(key)] = time.perf_counter() - t0
+        self.last_perf.setdefault("prefill_trace_bytes_per_bank", {})[str(key)] = self._trace_bytes() - before
+        return tid
+
+    def _trace_bytes(self):
+        try:
+            return ttnn.get_memory_view(self.mesh, ttnn.BufferType.TRACE).total_bytes_allocated_per_bank
+        except Exception:  # pragma: no cover
+            return 0
+
+    @contextlib.contextmanager
+    def _no_cache_misses(self):
+        """A program-cache miss inside a capture fails loudly instead of compiling (prepare must have compiled it)."""
+        f = getattr(self.mesh, "set_program_cache_misses_allowed", None)
+        if f is not None:
+            f(False)
+        try:
+            yield
+        finally:
+            if f is not None:
+                f(True)
 
     # ------------------------------------------------------------------------------------------
     # low level: decode
@@ -525,10 +590,17 @@ class Lfm2Generator(Generator):
                 self.counters["full_logits_readbacks"] += 1
                 pred = full.argmax(-1)
                 self._write_tokens(pred)
+            elif record_history:  # sampling + history append (one trace)
+                if self.history_count == HISTORY_ROWS:
+                    self._flush_history()
+                ttnn.execute_trace(self.mesh, self.sample_hist_traces[bucket], cq_id=0, blocking=False)
+                self.history_count += 1
+                self.counters["sampling_replays"] += 1
+                self.counters["history_appends"] += 1
             else:
                 ttnn.execute_trace(self.mesh, sid, cq_id=0, blocking=False)
                 self.counters["sampling_replays"] += 1
-            if record_history:
+            if record_history and compat:
                 self._record()
         self.pos_host[active] += 1
         if compat:
@@ -709,10 +781,16 @@ class Lfm2Generator(Generator):
         for tid, logits, sid in self.traces.values():
             ttnn.release_trace(self.mesh, tid)
             ttnn.release_trace(self.mesh, sid)
-        for t in (self.pf_sample_trace, self.append_trace):
+        for t in (
+            self.pf_sample_trace,
+            self.append_trace,
+            *self.prefill_traces.values(),
+            *self.sample_hist_traces.values(),
+        ):
             if t is not None:
                 ttnn.release_trace(self.mesh, t)
-        self.traces, self.pf_sample_trace, self.append_trace = {}, None, None
+        self.traces, self.pf_sample_trace, self.append_trace, self.prefill_traces = {}, None, None, {}
+        self.sample_hist_traces = {}
 
     def teardown(self):
         """Explicit end of the trace lifetime (the readiness runners call it after a run).  A shared generator

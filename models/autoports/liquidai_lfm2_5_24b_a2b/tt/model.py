@@ -21,8 +21,11 @@ bucket (``PREFILL_BUCKETS``); positions, page tables, chunk start and the ShortC
 so the compiled program set is finite (bucket x {first, continuation} chunk).
 """
 
+import contextlib
 import math
+import os
 import time
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -34,7 +37,7 @@ from .fused_decoder import DEFAULT_FUSIONS, make_rope
 from .model_config import Lfm2MoeArgs, load_hf_config
 from .multichip_decoder import DEFAULT_MESH_PLAN, MC_POLICY, MultichipDecoder, _ds_host, _shard_like
 from .optimized_decoder import DTYPES, DramShardedLinear, ShardedNorm, _ckc
-from .weights import load_global_state_dict, load_layer_state_dict
+from .weights import WeightCache, load_global_state_dict, load_layer_state_dict
 
 BLOCK_SIZE = 64  # paged KV block (tokens)
 PAGE_TABLE_ALIGN = 8  # page-table rows are a multiple of 32 bytes
@@ -51,6 +54,8 @@ HEAD_COL_UNIT = 768
 # generators built with build_generator(..., shared=True), keyed per mesh / configuration: lives here because the
 # readiness runners load tt/generator.py as a standalone file module (a second copy of its globals)
 SHARED_GENERATORS = {}
+# bump when this file changes how the embedding / final norm / LM head weights are built (weight-cache key)
+WEIGHT_LAYOUT_VERSION = 1
 
 
 def prefill_bucket(n):
@@ -129,8 +134,12 @@ class Lfm2Model:
         head_dtype="bfp8",
         head_cfg=HEAD_CFG,
         head_fidelity="hifi2",
+        weight_cache=None,
     ):
-        from .model_config import resolve_model_path
+        """``weight_cache``: directory of the device-weight cache (``weights.WeightCache``); default
+        ``$LFM2_WEIGHT_CACHE`` or ``~/.cache/tt_autoport_weights/lfm2_5_24b_a2b``; ``LFM2_WEIGHT_CACHE=0`` / ``False``
+        disables it."""
+        from .model_config import HF_REVISION, resolve_model_path
 
         assert tuple(mesh_device.shape) == (1, plan.tp), f"mesh {tuple(mesh_device.shape)} != (1, {plan.tp})"
         assert max_batch_size == TILE, "the decoder stack is built for 32 physical slots"
@@ -149,7 +158,41 @@ class Lfm2Model:
         self.vocab_local = math.ceil(self.vocab / self.tp / HEAD_COL_UNIT) * HEAD_COL_UNIT
         self.padded_vocab = self.vocab_local * self.tp
         H = self.H = args.hidden_size
+        cache = self._weight_cache(weight_cache, HF_REVISION, head_dtype, head_cfg, head_fidelity, max_batch_size)
+        with cache if cache is not None else contextlib.nullcontext():
+            self._build(cache, mesh_device, args, policy, plan, max_batch_size, head_dtype, head_cfg, head_fidelity, t0)
+        self.weight_cache = cache.summary() if cache is not None else None
+        logger.info(
+            f"Lfm2Model: {len(self.layers)} layers {self.layer_indices if len(self.layers) < 40 else '0..39'}, "
+            f"build {self.build_s['globals_head']:.1f} s globals/head + {self.build_s['layers']:.1f} s layers, "
+            f"weight cache {self.weight_cache}"
+        )
 
+    def _weight_cache(self, root, revision, head_dtype, head_cfg, head_fidelity, batch):
+        if root is None:
+            root = os.environ.get(
+                "LFM2_WEIGHT_CACHE", str(Path.home() / ".cache" / "tt_autoport_weights" / "lfm2_5_24b_a2b")
+            )
+        if root in (False, "0", ""):
+            return None
+        key = WeightCache.key_for(
+            revision=revision,
+            policy=repr(self.policy),
+            plan=repr(self.plan),
+            fusions=sorted(self.fusions),
+            head=(head_dtype, tuple(head_cfg), head_fidelity),
+            mesh=tuple(self.mesh.shape),
+            batch=batch,
+            max_seq_len=self.max_seq_len,
+            model_weights=(WEIGHT_LAYOUT_VERSION, HEAD_COL_UNIT),
+            checkpoint=WeightCache.checkpoint_fingerprint(self.model_path),
+        )
+        return WeightCache(root, key)
+
+    def _build(self, cache, mesh_device, args, policy, plan, max_batch_size, head_dtype, head_cfg, head_fidelity, t0):
+        scope = cache.scope if cache is not None else (lambda name: None)
+        H = self.H
+        scope("globals")
         g = load_global_state_dict(self.model_path)
         emb = g["embed_tokens.weight"]  # [V, H] bf16 (tied LM head)
         assert tuple(emb.shape) == (self.vocab, H)
@@ -170,9 +213,11 @@ class Lfm2Model:
         del g, emb, emb_pad, shards
         t_glob = time.perf_counter()
 
+        scope("rope")
         self.rope = make_rope(mesh_device, args, self.max_seq_len, self.fusions)
         self.layers = []
         for i in self.layer_indices:
+            scope(f"L{i:02d}")
             sd = load_layer_state_dict(self.model_path, i)
             self.layers.append(
                 MultichipDecoder.from_state_dict(
@@ -187,6 +232,8 @@ class Lfm2Model:
                 )
             )
             del sd
+        if cache is not None:
+            cache.stop()  # everything below (final-norm config, decode state) is not a weight: never cached
         self.resid_mem = self.layers[0].resid_mem
         assert all(l.resid_mem == self.resid_mem for l in self.layers)
         conv = [l for l in self.layers if not l.is_attention]
@@ -201,11 +248,8 @@ class Lfm2Model:
         self.max_blocks = math.ceil(blocks_for(self.max_seq_len) / PAGE_TABLE_ALIGN) * PAGE_TABLE_ALIGN
         self.state = DecodeState(mesh_device, self.batch, self.max_blocks, mask_width, mask_mem)
         self.kv = None
+        self.hoist_bucket_slices = os.environ.get("LFM2_HOIST_SLICES", "1") == "1"  # stage 7 D1 (A/B switch)
         self.build_s = {"globals_head": t_glob - t0, "layers": time.perf_counter() - t_glob}
-        logger.info(
-            f"Lfm2Model: {len(self.layers)} layers {self.layer_indices if len(self.layers) < 40 else '0..39'}, "
-            f"build {self.build_s['globals_head']:.1f} s globals/head + {self.build_s['layers']:.1f} s layers"
-        )
 
     # ------------------------------------------------------------------------------------------
     # state: KV cache, ShortConv state
@@ -290,16 +334,26 @@ class Lfm2Model:
         if self.attn_layers:
             b = bucket if (bucket is not None and self.bucketed_rope) else None
             cos, sin = self.rope.decode_cos_sin(st.rope_pos, batch=b)
+        # bucketed decode: the b-row page table / positions are sliced once per step for the 10 attention layers (the
+        # attention decode consumes b-row tensors directly: OptimizedAttention._decode_r3 `sliced` / b-user update path)
+        pt, cp = st.page_table, st.cur_pos
+        hoist = self.hoist_bucket_slices and bucket is not None and bucket < self.batch and self.attn_layers
+        if hoist:
+            pt = ttnn.slice(st.page_table, (0, 0), (bucket, st.page_table.shape[-1]))
+            cp = ttnn.slice(st.cur_pos, (0,), (bucket,))
         for l in self.layers:
             kw = dict(slot_active=st.slot_active, slot_mask=st.slot_mask, active_slots=bucket)
             if l.is_attention:
-                kw.update(rope=self.rope, rope_cos=cos, rope_sin=sin, cur_pos=st.cur_pos, page_table=st.page_table)
+                kw.update(rope=self.rope, rope_cos=cos, rope_sin=sin, cur_pos=cp, page_table=pt)
             y = l.decode_forward(x, **kw)
             ttnn.deallocate(x)
             x = y
         if cos is not None:
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
+        if hoist:
+            ttnn.deallocate(pt)
+            ttnn.deallocate(cp)
         logits = self._head_decode(x)
         ttnn.deallocate(x)
         if advance:
@@ -319,61 +373,112 @@ class Lfm2Model:
     # ------------------------------------------------------------------------------------------
     # prefill (eager; one chunk)
     # ------------------------------------------------------------------------------------------
-    def prefill_chunk(self, tokens, *, chunk_start, valid_len, slot, page_table_row, out="last", out_row=None):
-        """One prefill chunk for one sequence, eager.
-
-        ``tokens``: torch int ``[n]`` (n = ``valid_len`` <= PREFILL_CHUNK), absolute positions ``chunk_start ..``;
-        ``chunk_start`` a multiple of PREFILL_CHUNK (block aligned); ``slot``: the ShortConv state row; ``page_table_row``:
-        torch int32 ``[max_blocks]`` of this sequence (unused entries -> scratch block 0).  The chunk is padded to
-        ``prefill_bucket(n)`` rows with ``pad_token_id``; padded rows write K/V only into this sequence's own blocks past
-        its logical end or the scratch block, never attend backwards into valid rows' outputs, and are dropped.
-
-        ``out``: "none" (no head), "last" (logits of row ``valid_len - 1`` placed in row ``out_row`` (default: ``slot``)
-        of a ``[1, 1, 32, 32256]`` tensor, other rows 0-logits; same head path / layout as decode) or "all" (``[1, 1,
-        S_pad, 32256]`` vocab-sharded logits; the caller slices the logical rows).  Returns the device logits or None.
-        Every per-chunk device input is released before returning (trace-allocation safety)."""
+    def prefill_host_inputs(self, tokens, *, chunk_start, valid_len, slot, page_table_row, out_row=None):
+        """Host values of one chunk's runtime inputs (bucket ``S = prefill_bucket(valid_len)``): token ids padded with
+        ``pad_token_id``, positions, the sequence's page-table row, the chunk's block row, chunk start, ShortConv carry /
+        tail / keep selections and the last-row selector (row ``valid_len - 1`` -> output row ``out_row``, default
+        ``slot``).  Every chunk-dependent quantity is data, so one program set serves all chunks of a bucket."""
         n = int(valid_len)
         S = prefill_bucket(n)
         assert chunk_start % PREFILL_CHUNK == 0 and chunk_start + n <= self.max_seq_len, (chunk_start, n)
-        mesh, rm = self.mesh, ttnn.ROW_MAJOR_LAYOUT
         ids = torch.full((1, S), self.args.pad_token_id, dtype=torch.int32)
         ids[0, :n] = torch.as_tensor(tokens, dtype=torch.int32).reshape(-1)[:n]
         pos = torch.arange(chunk_start, chunk_start + S, dtype=torch.int32).clamp(max=self.rope.max_seq_len - 1)
-        tt_ids = _replicated(mesh, ids, ttnn.uint32, rm)
-        tt_pos = _replicated(mesh, pos.reshape(1, S), ttnn.uint32, rm)
-        temps = [tt_ids, tt_pos]
-        e = ttnn.embedding(tt_ids, self.embed, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, S, H]
-        x = ttnn.reshape(e, (1, 1, S, self.H))
-        attn_kw, rope = {}, None
+        h = {"ids": ids, "pos": pos.reshape(1, S)}
         if self.attn_layers:
-            cs = []
-            for table in (self.rope.cos_rm, self.rope.sin_rm):
-                t = ttnn.embedding(tt_pos, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, S, hd]
-                cs.append(ttnn.reshape(t, (1, 1, S, t.shape[-1])))
-            temps += cs
-            rope = _ChunkRope(self.rope, *cs)
-            row = torch.as_tensor(page_table_row, dtype=torch.int32).reshape(1, -1)
-            first = chunk_start // self.block_size
-            nblk = blocks_for(S, self.block_size)
+            row = torch.zeros(1, self.max_blocks, dtype=torch.int32)
+            src_row = torch.as_tensor(page_table_row, dtype=torch.int32).reshape(-1)[: self.max_blocks]
+            row[0, : src_row.numel()] = src_row
+            first, nblk = chunk_start // self.block_size, blocks_for(S, self.block_size)
             chunk_row = torch.zeros(1, math.ceil(nblk / PAGE_TABLE_ALIGN) * PAGE_TABLE_ALIGN, dtype=torch.int32)
             src = row[0, first : first + nblk]
             chunk_row[0, : src.numel()] = src
-            pt = _replicated(mesh, row, ttnn.int32, rm)
-            cpt = _replicated(mesh, chunk_row, ttnn.int32, rm)
-            cst = _replicated(mesh, torch.tensor([chunk_start], dtype=torch.int32), ttnn.int32, rm)
-            temps += [pt, cpt, cst]
+            h.update(pt=row, cpt=chunk_row, cst=torch.tensor([chunk_start], dtype=torch.int32))
+        if self.conv_layers:
+            c0, c1, t0, t1, keep = ConvPrefillInputs.host_tensors(
+                slot=slot, valid_len=n, padded_len=S, continuation=chunk_start > 0, windowed=False
+            )
+            h.update(carry0=c0, carry1=c1, tail0=t0, tail1=t1, keep=keep)
+        sel = torch.zeros(1, 1, TILE, S)
+        sel[0, 0, slot if out_row is None else out_row, n - 1] = 1.0
+        h["sel"] = sel
+        return S, h
+
+    _PF_DTYPES = {
+        "ids": (ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        "pos": (ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        "pt": (ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+        "cpt": (ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+        "cst": (ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    }
+
+    def prefill_inputs(self, S):
+        """Persistent device inputs of prefill bucket ``S`` (stable addresses for the prefill traces; allocated by
+        ``alloc_prefill_inputs`` before any capture)."""
+        return self._pf_inputs[S]
+
+    def alloc_prefill_inputs(self):
+        """Allocate the persistent per-bucket prefill inputs (< 2 MB per chip for all buckets).  Call before the first
+        trace capture: an allocation made later and kept across replays would be trace-unsafe."""
+        if getattr(self, "_pf_inputs", None):
+            return
+        self._pf_inputs = {}
+        for S in PREFILL_BUCKETS:
+            _, h = self.prefill_host_inputs(
+                torch.zeros(S, dtype=torch.int32), chunk_start=0, valid_len=S, slot=0, page_table_row=[0]
+            )
+            self._pf_inputs[S] = {
+                k: _replicated(self.mesh, v, *self._PF_DTYPES.get(k, (ttnn.bfloat16, ttnn.TILE_LAYOUT)))
+                for k, v in h.items()
+            }
+
+    def load_prefill_inputs(self, S, host):
+        """Host refresh of bucket ``S``'s persistent inputs (ordered after earlier replays on the command queue)."""
+        dev = self._pf_inputs[S]
+        for k, v in host.items():
+            dt, lay = self._PF_DTYPES.get(k, (ttnn.bfloat16, ttnn.TILE_LAYOUT))
+            ttnn.copy_host_to_device_tensor(host_tensor(self.mesh, v, dt, lay), dev[k])
+        return len(host)
+
+    def prefill_chunk_device(self, S, *, continuation, out="last", accumulate_into=None):
+        """Device-only prefill of one chunk of bucket ``S`` over the persistent inputs (eager or inside a trace).
+
+        ``continuation`` selects the program family (first chunk / chunk at a 2048-aligned start > 0); the actual start,
+        positions, blocks, slot and valid length are the runtime inputs.  ``out``: "none" (no head), "last" (last valid
+        row's logits in row ``out_row`` of ``[1, 1, 32, 32256]``, other rows exactly 0; with ``accumulate_into`` they are
+        added into that persistent tensor and nothing is returned) or "all" (``[1, 1, S, 32256]``, eager readiness path).
+        """
+        inp = self._pf_inputs[S]
+        # the representative start (0 / PREFILL_CHUNK) selects the same SDPA programs as any PREFILL_CHUNK-aligned start
+        # only while the decoder's q / k chunk caps are powers of two dividing PREFILL_CHUNK (prefill_sdpa_chunk and the
+        # k_chunk loop depend on the start only through divisibility); the runtime start is inp["cst"]
+        for l in self.attn_layers:
+            q_cap, k_cap = l.mixer.sdpa_chunk, l.policy.sdpa_prefill_k_chunk or l.mixer.sdpa_chunk
+            assert all(c & (c - 1) == 0 and PREFILL_CHUNK % c == 0 for c in (q_cap, k_cap)), (q_cap, k_cap)
+        e = ttnn.embedding(inp["ids"], self.embed, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, S, H]
+        x = ttnn.reshape(e, (1, 1, S, self.H))
+        attn_kw, cs = {}, []
+        if self.attn_layers:
+            for table in (self.rope.cos_rm, self.rope.sin_rm):
+                t = ttnn.embedding(inp["pos"], table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, S, hd]
+                cs.append(ttnn.reshape(t, (1, 1, S, t.shape[-1])))
+            # chunk_start only selects the SDPA chunk program (first vs 2048-aligned continuation): runtime start in cst
             attn_kw = dict(
-                rope=rope, chunk_start=chunk_start, page_table=pt, chunk_page_table=cpt, chunk_start_tensor=cst
+                rope=_ChunkRope(self.rope, *cs),
+                chunk_start=PREFILL_CHUNK if continuation else 0,
+                page_table=inp["pt"],
+                chunk_page_table=inp["cpt"],
+                chunk_start_tensor=inp["cst"],
             )
         conv_in = None
         if self.conv_layers:
-            conv_in = ConvPrefillInputs.create(
-                mesh, slot=slot, valid_len=n, padded_len=S, continuation=chunk_start > 0, windowed=False
-            )
+            conv_in = ConvPrefillInputs(inp["carry0"], inp["carry1"], inp["tail0"], inp["tail1"], inp["keep"])
         for l in self.layers:
             y = l.prefill_forward(x, **attn_kw) if l.is_attention else l.prefill_forward(x, conv_inputs=conv_in)
             ttnn.deallocate(x)
             x = y
+        for t in cs:
+            ttnn.deallocate(t)
         logits = None
         if out == "all":
             xn = ttnn.rms_norm(
@@ -382,26 +487,32 @@ class Lfm2Model:
             logits = self.head.prefill(xn, self.head_ckc, DRAM)
             ttnn.deallocate(xn)
         elif out == "last":
-            sel = torch.zeros(1, 1, TILE, S)
-            sel[0, 0, slot if out_row is None else out_row, n - 1] = 1.0
-            sel_tt = _replicated(mesh, sel, ttnn.bfloat16, ttnn.TILE_LAYOUT)
-            h = ttnn.matmul(sel_tt, x, compute_kernel_config=self.ckc_norm, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(sel_tt)
+            h = ttnn.matmul(inp["sel"], x, compute_kernel_config=self.ckc_norm, memory_config=ttnn.L1_MEMORY_CONFIG)
             logits = self._head_decode(h)
             ttnn.deallocate(h)
+            if accumulate_into is not None:
+                ttnn.add(accumulate_into, logits, output_tensor=accumulate_into)  # rows of other slots are exactly 0
+                ttnn.deallocate(logits)
+                logits = None
         ttnn.deallocate(x)
-        for t in temps:
-            ttnn.deallocate(t)
-        if conv_in is not None:
-            for t in (
-                conv_in.carry_sel_0,
-                conv_in.carry_sel_1,
-                conv_in.tail_sel_0,
-                conv_in.tail_sel_1,
-                conv_in.keep_mask,
-            ):
-                ttnn.deallocate(t)
         return logits
+
+    def prefill_chunk(self, tokens, *, chunk_start, valid_len, slot, page_table_row, out="last", out_row=None):
+        """One eager prefill chunk for one sequence (see ``prefill_host_inputs`` / ``prefill_chunk_device``): chunks of
+        at most PREFILL_CHUNK rows at PREFILL_CHUNK-aligned starts, padded to ``prefill_bucket(n)`` with
+        ``pad_token_id``; padded rows write K/V only into this sequence's own blocks past its logical end or the scratch
+        block, never feed valid rows, and are dropped.  Returns the device logits (``out`` "last" / "all") or None."""
+        self.alloc_prefill_inputs()
+        S, host = self.prefill_host_inputs(
+            tokens,
+            chunk_start=chunk_start,
+            valid_len=valid_len,
+            slot=slot,
+            page_table_row=page_table_row,
+            out_row=out_row,
+        )
+        self.load_prefill_inputs(S, host)
+        return self.prefill_chunk_device(S, continuation=chunk_start > 0, out=out)
 
     def logits_to_host(self, logits, rows=None):
         """Vocab-sharded device logits -> torch fp32 ``[..., rows, 128000]`` (full-logits readback; padded tail dropped)."""

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Full-model performance on a built generator (called by ``readiness_driver --runs perf``).
+"""Full-model performance on a built generator (TTFT also at prompts 1024 / 2048 / 4100; (called by ``readiness_driver --runs perf``).
 
 Workload shape of the headline numbers: batch 1, prompt 128 tokens (chat-template AIME24 prompt truncated to 128 ids) /
 generate 128, greedy.  Reported (wall clock, tracking / profiler off):
@@ -38,6 +38,13 @@ def _prompt(gen, n=128, index=0):
     return ids[:n]
 
 
+def _fresh(gen):
+    """Request boundary for the measurements: reset, then wait for its device work (KV / state zeroing) so a request's
+    TTFT does not include the previous request's reset."""
+    gen.reset()
+    ttnn.synchronize_device(gen.mesh)
+
+
 def _time_replays(gen, trace_ids, iters):
     ttnn.synchronize_device(gen.mesh)
     t0 = time.perf_counter()
@@ -50,7 +57,7 @@ def _time_replays(gen, trace_ids, iters):
 
 def batch_token_out(gen, prompt, b, steps=64):
     """Slots 0..b-1 active (prompt lengths prompt_len - 3 s), free-running token-out decode, ms/step."""
-    gen.reset()
+    _fresh(gen)
     lens = [max(8, len(prompt) - 3 * s) for s in range(b)]
     toks = torch.zeros(b, len(prompt), dtype=torch.int64)
     for s in range(b):
@@ -72,11 +79,12 @@ def batch_token_out(gen, prompt, b, steps=64):
 def run_perf(gen, repeats=3, batches=(1, 4, 8, 32), argmax=True):
     out = {"workload": "batch 1, prompt 128 / generate 128, greedy"}
     prompt = _prompt(gen)
-    gen.reset()
-    gen.generate(prompt, 8)  # warm captures of bucket 1 (deferred first capture is counted separately)
+    _fresh(gen)
+    gen.generate(prompt, 8)  # deferred first captures (bucket 1 decode, the bucket-128 prefill trace, samplers)
+    out["first_request_ttft_ms"] = gen.last_perf["ttft_s"] * 1e3
     res = []
     for _ in range(repeats):
-        gen.reset()
+        _fresh(gen)
         c0 = dict(gen.counters)
         gen.generate(prompt, 128, stop_on_eos=False)  # headline: no EOS polling (one history readback per request)
         c1 = dict(gen.counters)
@@ -87,11 +95,25 @@ def run_perf(gen, repeats=3, batches=(1, 4, 8, 32), argmax=True):
     out["token_out_ms_step"] = 1e3 / out["token_out_tok_s_u"]
     res = []
     for _ in range(repeats):
-        gen.reset()
+        _fresh(gen)
         gen.generate(prompt, 128, next_input=lambda i, p: p, stop_on_eos=False)
         res.append(dict(gen.last_perf))
     out["teacher_forcing_tok_s_u"] = statistics.median(r["decode_tok_s_u"] for r in res)
     out["teacher_forcing_ms_step"] = 1e3 / out["teacher_forcing_tok_s_u"]
+    out["ttft_ms_by_prompt_len"] = {}
+    for n in (128, 1024, 2048, 4100):
+        p = _prompt(gen, n)
+        _fresh(gen)
+        gen.generate(p, 2, stop_on_eos=False)  # captures this length's prefill keys once
+        vals = []
+        for _ in range(repeats):
+            _fresh(gen)
+            gen.generate(p, 2, stop_on_eos=False)
+            vals.append(gen.last_perf["ttft_s"] * 1e3)
+        out["ttft_ms_by_prompt_len"][str(n)] = statistics.median(vals)
+        logger.info(f"PERF TTFT prompt {n}: {out['ttft_ms_by_prompt_len'][str(n)]:.1f} ms")
+    out["prefill_trace_bytes_per_bank"] = dict(gen.last_perf.get("prefill_trace_bytes_per_bank", {}))
+    out["prefill_capture_s"] = dict(gen.last_perf.get("prefill_capture_s", {}))
     tid, _, sid = gen.traces[1]
     out["logits_only_ms_step"] = _time_replays(gen, [tid], 100)
     out["sampling_only_ms_step"] = _time_replays(gen, [sid], 100)
@@ -100,12 +122,12 @@ def run_perf(gen, repeats=3, batches=(1, 4, 8, 32), argmax=True):
     for b in batches:
         out["batch_token_out_ms_step"][str(b)] = batch_token_out(gen, prompt, b)
         logger.info(f"PERF batch {b}: {out['batch_token_out_ms_step'][str(b)]:.2f} ms/step")
-    gen.reset()
+    _fresh(gen)
     out["trace_region_used"] = _trace_usage(gen.mesh)
-    gen.reset()
+    _fresh(gen)
     gen.generate(prompt, 128, stop_on_eos=True)  # EOS polling every 16 steps (default free-running mode)
     out["token_out_eos_polling_tok_s_u"] = gen.last_perf["decode_tok_s_u"]
-    gen.reset()
+    _fresh(gen)
     ref = gen.generate(prompt, 128, stop_on_eos=False)
     if argmax:
         # second generator over the same model: built after gen's last replay, and gen is not replayed afterwards

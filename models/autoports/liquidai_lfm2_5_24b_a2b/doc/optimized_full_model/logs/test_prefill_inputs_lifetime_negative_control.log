@@ -1,0 +1,74 @@
+2026-10-17 22:55:33.940 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, github-actions-annotate-failures-0.3.0, anyio-4.15.1, dash-2.15.0, cov-7.0.0, split-0.11.0, repeat-0.9.4, benchmark-5.2.3
+timeout: 1800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 2 items
+
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture 2026-10-17 22:55:35.040 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_full_model:env:34 - TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+2026-10-17 22:55:35.040 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-17 22:55:35.040 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-10-17 22:55:35.040 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-17 22:55:35.040 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-17 22:55:35.054 | info     |             UMD | Established firmware bundle version: 19.15.0 (topology_discovery.cpp:654)
+2026-10-17 22:55:35.054 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-17 22:55:35.123 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:176)
+2026-10-17 22:55:35.123 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-10-17 22:55:35.123 | info     |             UMD | KMD version: 2.11.0 (cluster.cpp:153)
+2026-10-17 22:55:35.123 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-10-17 22:55:35.126 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-10-17 22:55:35.248 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-10-17 22:55:35.249 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-10-17 22:55:35.249 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-10-17 22:55:35.249 | info     |          Fabric | Loaded physical groupings from: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-17 22:55:35.250 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-17 22:55:35.250 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-10-17 22:55:35.250 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-10-17 22:55:35.250 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-10-17 22:55:35.250 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-10-17 22:55:35.339 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-17 22:55:35.396 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-17 22:55:35.396 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files: 100%|██████████| 6/6 [00:00<00:00, 65027.97it/s]
+2026-10-17 22:56:04.012 | INFO     | models.autoports.liquidai_lfm2_5_24b_a2b.tt.model:__init__:165 - Lfm2Model: 3 layers (0, 2, 3), build 5.2 s globals/head + 22.7 s layers, weight cache None
+2026-10-17 22:56:15.928 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tt.generator:prepare:335 - Lfm2Generator.prepare: 3.9 s
+PASSED
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049] PASSED
+
+=============================== warnings summary ===============================
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+42.70s setup    models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+18.84s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049]
+0.21s setup    models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049]
+0.13s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+0.03s teardown models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049]
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_reset_after_capture
+PASSED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_full_model.py::test_prefill_traced_vs_eager[2049]
+=================== 2 passed, 2 warnings in 62.61s (0:01:02) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-17 22:56:39.672 | info     |    BuildKernels | JIT cache stats: 1821/1821 hits (100.0%) [1821 cached, 1492 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-17 22:56:39.672 | info     |    BuildKernels | JIT telemetry: 33 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-17 22:56:39.712 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-17 22:56:39.712 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-10-17 22:56:39.886 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-10-17 22:56:39.886 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-10-17 22:56:39.886 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)

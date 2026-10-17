@@ -66,3 +66,123 @@ def to_hf_module_state_dict(layer_sd, num_experts):
         out["feed_forward.experts.down_proj"] = down
         out["feed_forward.gate.weight"] = layer_sd["feed_forward.gate.weight"]
     return out
+
+
+# ------------------------------------------------------------------------------------------------
+# device-weight cache (build time only; numerics unchanged)
+# ------------------------------------------------------------------------------------------------
+# modules whose code decides device weight contents / layouts (the generator does not; model.py builds the embedding,
+# final norm and LM head, and model.WEIGHT_LAYOUT_VERSION is in the key as well)
+WEIGHT_CODE_FILES = (
+    "functional_decoder.py",
+    "fused_decoder.py",
+    "optimized_decoder.py",
+    "multichip_decoder.py",
+    "weights.py",
+    "model_config.py",
+    "model.py",
+)
+
+
+class WeightCache:
+    """Routes the device-bound ``ttnn.from_torch`` calls of a model build through ``ttnn.as_tensor(cache_file_name=...)``.
+
+    Active only inside ``with cache:`` (the model constructor); every weight-upload site of the decoder modules goes through
+    ``ttnn.from_torch``, so one hook covers them all without touching the decoder code.  File name = scope (e.g. the layer)
+    / call sequence in that scope / shape / dtype / layout; the directory key hashes the weight-defining code (``WEIGHT_CODE_FILES``), the HF
+    revision and the construction configuration, so any code or policy change starts a fresh cache.  On a hit
+    ``as_tensor`` loads the tensorized (tilized / block-float) host tensor and places it with its recorded memory config,
+    skipping the host conversion.  Tensors below ``min_numel`` elements, all-zero tensors (mutable state such as the
+    ShortConv state, zero constants), host-only tensors, calls with uncommon arguments and everything after ``stop()``
+    (decode state / inputs) bypass the cache.  The key also covers the checkpoint files (``checkpoint_fingerprint``)."""
+
+    def __init__(self, root, key, min_numel=1 << 16):
+        self.dir = Path(root) / key
+        self.min_numel = min_numel
+        self.scope_name, self.seq = "globals", 0
+        self.hits = self.misses = self.bypassed = 0
+        self._orig = None
+        self._inside = False
+
+    @staticmethod
+    def key_for(**config):
+        import hashlib
+
+        h = hashlib.sha256()
+        for f in sorted((Path(__file__).parent).glob("*.py")):
+            if f.name in WEIGHT_CODE_FILES:
+                h.update(f.name.encode())
+                h.update(f.read_bytes())
+        h.update(repr(sorted(config.items())).encode())
+        return h.hexdigest()[:20]
+
+    @staticmethod
+    def checkpoint_fingerprint(model_path):
+        """Resolved checkpoint directory + (name, size, mtime) of every safetensors shard and the index: a different or
+        re-downloaded snapshot selects a new cache key."""
+        p = Path(model_path).resolve()
+        files = sorted(p.glob("*.safetensors")) + [p / "model.safetensors.index.json"]
+        return (str(p), tuple((f.name, f.stat().st_size, int(f.stat().st_mtime)) for f in files if f.exists()))
+
+    def scope(self, name):
+        self.scope_name, self.seq = name, 0
+
+    def stop(self):
+        """End of the weight-construction region: later device tensors (state, inputs) bypass the cache."""
+        self.scope_name, self.stopped = None, True
+
+    def __enter__(self):
+        import ttnn
+
+        self._orig = ttnn.from_torch
+        orig, cache = self._orig, self
+
+        def from_torch(tensor, dtype=None, **kw):
+            device = kw.get("device")
+            extra = set(kw) - {"layout", "device", "memory_config", "mesh_mapper"}
+            if (
+                cache._inside
+                or getattr(cache, "stopped", False)
+                or device is None
+                or extra
+                or not isinstance(tensor, torch.Tensor)
+                or tensor.numel() < cache.min_numel
+                or not bool(tensor.any())  # zero-initialised state / constants are created fresh, never cached
+            ):
+                cache.bypassed += 0 if cache._inside else 1
+                return orig(tensor, dtype, **kw)
+            layout = kw.get("layout", ttnn.ROW_MAJOR_LAYOUT)
+            mem = kw.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+            shape = "x".join(str(s) for s in tensor.shape)
+            name = cache.dir / cache.scope_name / f"{cache.seq:04d}_{shape}_{type(kw.get('mesh_mapper')).__name__}"
+            cache.seq += 1
+            path = Path(f"{name}_dtype_{dtype.name if dtype is not None else 'None'}_layout_{layout.name}.tensorbin")
+            if path.exists():
+                cache.hits += 1
+            else:
+                cache.misses += 1
+            cache._inside = True
+            try:
+                return ttnn.as_tensor(
+                    tensor,
+                    dtype=dtype,
+                    layout=layout,
+                    device=device,
+                    memory_config=mem,
+                    mesh_mapper=kw.get("mesh_mapper"),
+                    cache_file_name=str(name),
+                )
+            finally:
+                cache._inside = False
+
+        ttnn.from_torch = from_torch
+        return self
+
+    def __exit__(self, *exc):
+        import ttnn
+
+        ttnn.from_torch = self._orig
+        return False
+
+    def summary(self):
+        return {"dir": str(self.dir), "hits": self.hits, "misses": self.misses, "bypassed": self.bypassed}

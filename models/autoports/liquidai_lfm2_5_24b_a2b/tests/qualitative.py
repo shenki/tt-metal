@@ -18,9 +18,15 @@ Artifacts:  doc/full_model/qualitative/{qualitative_prompt_format.json, prompts.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parents[1] / "doc" / "full_model" / "qualitative"
+# stage evidence dir (LFM2_QUAL_OUT); the HF control is reused from stage 6 when absent here (same model / revision /
+# tokenizer / chat template / prompt suite: qualitative_prompt_format.json)
+OUT = Path(
+    os.environ.get("LFM2_QUAL_OUT") or Path(__file__).resolve().parents[1] / "doc" / "full_model" / "qualitative"
+)
+HF_CONTROL_FALLBACK = Path(__file__).resolve().parents[1] / "doc" / "full_model" / "qualitative" / "hf_greedy.json"
 GEN = 128
 
 
@@ -120,6 +126,8 @@ def run_tt(gen):
         (OUT / f"{name}.json").write_text(json.dumps(res, indent=1) + "\n")
         summary[name] = [r["text"][:120] for r in res]
     hf_path = OUT / "hf_greedy.json"
+    if not hf_path.exists():
+        hf_path = HF_CONTROL_FALLBACK
     if hf_path.exists():
         hf = {r["id"]: r["token_ids"] for r in json.loads(hf_path.read_text())}
         tt = {r["id"]: r["token_ids"] for r in json.loads((OUT / "tt_greedy.json").read_text())}
