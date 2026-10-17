@@ -82,3 +82,6 @@ Hardware checked free (qwen service inactive, no Qwen container, no device PIDs)
 
 ## O-7 stage review round 2 (same Fable reviewer): clean-pass
 All round-1 findings verified fixed on the live worktree; commit-time check: compact logs force-added, driver logs as .log.xz.
+
+## Commit
+* tt-metal `autoport/lfm2_5_24b_a2b`: stage 7 = 13e41cd4 (post-commit mesh smoke 1x4 clean); local only, not pushed.
