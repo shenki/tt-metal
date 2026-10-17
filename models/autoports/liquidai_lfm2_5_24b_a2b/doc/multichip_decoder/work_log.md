@@ -196,3 +196,8 @@ us on the four chips for real routing.  PCC unchanged (`logs/dev_ep_prefill2.log
    `tt/multichip_decoder.py` MeshReduce.decode ("scratch allocated per call ... optimized-multichip-stage candidate",
    replacing "a persistent L1 buffer would collide with the prefill hybrid routed-expert op"); README labels which
    report each prefill-glue aggregation comes from; context_contract.json newline.
+
+## Stage 4 commit
+`70eb2c13` (2026-10-17). Pre-commit hooks reformatted the code; post-commit device smoke on the reformatted code (real
+weights, TT_METAL_TRACE_ALLOC_TRACKING=1, `-k "stacked or perf or (single_user and 65-2048) or (vs_single_chip and None)"`):
+19 passed (`logs/post_commit_smoke.log`).
