@@ -1,0 +1,359 @@
+{
+ "layers": "all",
+ "reference": "bringup/references/lfm2_5_24b_a2b_aime24_chat.refpt",
+ "build_prepare_s": 476.1535179889979,
+ "model_build_s": {
+  "globals_head": 3.316436929999327,
+  "layers": 399.3302858809984
+ },
+ "prefill": [
+  {
+   "top1": 0.98,
+   "top5": 1.0,
+   "top100": 1.0,
+   "matches_top1": 98,
+   "matches_top5": 100,
+   "matches_top100": 100,
+   "total": 100,
+   "k": 100
+  }
+ ],
+ "prefill_wall_s": 1.7337222740025027,
+ "prefill_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 2,
+  "position_refreshes": 1,
+  "rope_refreshes": 1,
+  "mask_refreshes": 2,
+  "token_refreshes": 1,
+  "seed_refreshes": 1,
+  "resets": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 1
+ },
+ "prefill_last_perf": {
+  "prepare_s": 6.656136199002503
+ },
+ "tf": [
+  {
+   "top1": 0.98,
+   "top5": 1.0,
+   "top100": 1.0,
+   "matches_top1": 98,
+   "matches_top5": 100,
+   "matches_top100": 100,
+   "total": 100,
+   "k": 100,
+   "elapsed_s": 1.4070643489976646,
+   "e2e_t/s/u": 71.06995502461272,
+   "ttft_ms": 449.9435070028994,
+   "decode_tokens": 99.0,
+   "decode_elapsed_s": 0.9569466049943003,
+   "decode_t/s/u": 103.4540479931894
+  }
+ ],
+ "tf_wall_s": 1.4093461029988248,
+ "tf_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 2,
+  "position_refreshes": 2,
+  "rope_refreshes": 2,
+  "mask_refreshes": 4,
+  "token_refreshes": 4,
+  "seed_refreshes": 1,
+  "resets": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 2,
+  "page_table_refreshes": 1,
+  "trace_captures": 4,
+  "prefill_sampling_replays": 1,
+  "token_readbacks": 100,
+  "model_replays": 99,
+  "sampling_replays": 99
+ },
+ "tf_last_perf": {
+  "prepare_s": 6.656136199002503,
+  "capture_s": {
+   "1": 0.24346281600446673,
+   "4": 0.2784975949980435,
+   "8": 0.27590022799995495,
+   "None": 0.29195499300112715
+  },
+  "ttft_s": 0.44599431900132913,
+  "decode_steps": 99,
+  "decode_s": 0.9563132550028968,
+  "decode_tok_s_u": 103.52256384828642,
+  "mode": "teacher_forcing"
+ },
+ "perf": {
+  "workload": "batch 1, prompt 128 / generate 128, greedy",
+  "token_out_counters_per_request": {
+   "history_cursor_refreshes": 8,
+   "position_refreshes": 1,
+   "rope_refreshes": 1,
+   "mask_refreshes": 2,
+   "token_refreshes": 1,
+   "prefill_chunks": 1,
+   "prefill_sampling_replays": 1,
+   "token_readbacks": 1,
+   "model_replays": 127,
+   "sampling_replays": 127,
+   "history_replays": 127,
+   "history_readbacks": 8
+  },
+  "ttft_ms": 219.6434750003391,
+  "token_out_tok_s_u": 105.39592566242041,
+  "token_out_ms_step": 9.488032803117704,
+  "teacher_forcing_tok_s_u": 102.34233917472096,
+  "teacher_forcing_ms_step": 9.771127062991782,
+  "logits_only_ms_step": 9.062113749969285,
+  "sampling_only_ms_step": 0.3402824499789858,
+  "model_plus_sampling_ms_step": 9.401374320004834,
+  "batch_token_out_ms_step": {
+   "1": 9.42073165617785,
+   "4": 13.832687093781715,
+   "8": 19.254347562537077,
+   "32": 26.23703645315345
+  },
+  "trace_region_used": {
+   "largest_contiguous_bytes_free_per_bank": 24630272,
+   "num_banks": 8,
+   "total_bytes_allocated_per_bank": 8924160,
+   "total_bytes_free_per_bank": 24630272,
+   "total_bytes_per_bank": 33554432
+  },
+  "force_argmax": {
+   "token_out_tok_s_u": 99.53314144560083,
+   "sampling_only_ms_step": 0.9028056499664672,
+   "same_tokens_as_split_greedy": true
+  }
+ },
+ "perf_wall_s": 37.112080605998926,
+ "perf_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 52,
+  "position_refreshes": 27,
+  "rope_refreshes": 27,
+  "mask_refreshes": 52,
+  "token_refreshes": 29,
+  "seed_refreshes": 14,
+  "resets": 14,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 55,
+  "page_table_refreshes": 1,
+  "trace_captures": 10,
+  "prefill_sampling_replays": 13,
+  "token_readbacks": 493,
+  "model_replays": 1271,
+  "sampling_replays": 1271,
+  "history_replays": 787,
+  "history_readbacks": 37
+ },
+ "perf_last_perf": {
+  "prepare_s": 6.656136199002503,
+  "capture_s": {
+   "1": 0.24346281600446673,
+   "4": 0.2784975949980435,
+   "8": 0.27590022799995495,
+   "None": 0.29195499300112715
+  },
+  "ttft_s": 0.2445919449965004,
+  "decode_steps": 127,
+  "decode_s": 1.2061240350012667,
+  "decode_tok_s_u": 105.29596982939373,
+  "mode": "token_out"
+ },
+ "memory": {
+  "DRAM": {
+   "total_bytes_per_bank": 4238786944,
+   "allocated_bytes_per_bank": 3117108864,
+   "free_bytes_per_bank": 1121678080,
+   "largest_contiguous_free_per_bank": 1109405312,
+   "num_banks": 8
+  },
+  "L1": {
+   "total_bytes_per_bank": 1436544,
+   "allocated_bytes_per_bank": 189696,
+   "free_bytes_per_bank": 1246848,
+   "largest_contiguous_free_per_bank": 1217920,
+   "num_banks": 110
+  },
+  "TRACE": {
+   "total_bytes_per_bank": 33554432,
+   "allocated_bytes_per_bank": 8924160,
+   "free_bytes_per_bank": 24630272,
+   "largest_contiguous_free_per_bank": 24630272,
+   "num_banks": 8
+  },
+  "dram_allocated_gib_per_chip": 23.224270820617676,
+  "dram_total_gib_per_chip": 31.58142375946045,
+  "kv_blocks": 65537,
+  "kv_block_size": 64,
+  "captured_buckets": [
+   "1",
+   "4",
+   "8",
+   "None"
+  ]
+ },
+ "memory_wall_s": 0.006979751000471879,
+ "memory_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 52,
+  "position_refreshes": 27,
+  "rope_refreshes": 27,
+  "mask_refreshes": 52,
+  "token_refreshes": 29,
+  "seed_refreshes": 14,
+  "resets": 14,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 55,
+  "page_table_refreshes": 1,
+  "trace_captures": 10,
+  "prefill_sampling_replays": 13,
+  "token_readbacks": 493,
+  "model_replays": 1271,
+  "sampling_replays": 1271,
+  "history_replays": 787,
+  "history_readbacks": 37
+ },
+ "memory_last_perf": {
+  "prepare_s": 6.656136199002503,
+  "capture_s": {
+   "1": 0.24346281600446673,
+   "4": 0.2784975949980435,
+   "8": 0.27590022799995495,
+   "None": 0.29195499300112715
+  },
+  "ttft_s": 0.2445919449965004,
+  "decode_steps": 127,
+  "decode_s": 1.2061240350012667,
+  "decode_tok_s_u": 105.29596982939373,
+  "mode": "token_out"
+ },
+ "qual": {
+  "tt_greedy": [
+   "\nWe need to write a haiku about machine learning. Haiku: 5-7-5 syllables. Need to be concise. Let me think of a good one",
+   "\nWe need to explain supervised vs unsupervised learning in simple terms. First person, concrete. No \"as an AI\". Lead wit",
+   "1.  **Analyze the Request:**\n    *   **Prompt:** \"Complete this story: Once upon a time, in a faraway kingdom, there liv",
+   "1.  **Analyze the Request:** The user is asking for the \"three laws of thermodynamics.\" This is a standard physics quest",
+   "The user wants to translate the English sentence \"Hello, how are you today?\" into French.\n\n1.  **Analyze the source sent",
+   "\nOkay, I need to write a Python function to calculate the Fibonacci sequence. Let me think about how the Fibonacci seque"
+  ],
+  "tt_topk": [
+   "\nWe need to write a haiku about machine learning. Haiku: 5-7-5 syllables. Need to be about machine learning. Keep it sim",
+   "We need to answer: \"Explain the difference between supervised and unsupervised learning in simple terms.\"\n\nWe need to pr",
+   "\nOkay, the user wants me to complete the story that starts with \"Once upon a time, in a faraway kingdom, there lived a c",
+   "\nThe user asks: \"What are the three laws of thermodynamics?\" This is a straightforward question. The answer should list ",
+   "1.  **Analyze the Request:**\n    *   Source text: \"Hello, how are you today?\"\n    *   Target language: French.\n\n2.  **Id",
+   "We need to respond with a Python function that calculates the Fibonacci sequence. The user asks: \"Write a Python functio"
+  ],
+  "agreement": {
+   "0": {
+    "first_divergence": 27,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "1": {
+    "first_divergence": 5,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "2": {
+    "first_divergence": 102,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "3": {
+    "first_divergence": 57,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "4": {
+    "first_divergence": 68,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "5": {
+    "first_divergence": 21,
+    "hf_len": 128,
+    "tt_len": 128
+   }
+  }
+ },
+ "qual_wall_s": 16.825468604998605,
+ "qual_counters": {
+  "sampling_param_refreshes": 12,
+  "history_cursor_refreshes": 160,
+  "position_refreshes": 51,
+  "rope_refreshes": 51,
+  "mask_refreshes": 100,
+  "token_refreshes": 53,
+  "seed_refreshes": 32,
+  "resets": 26,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 67,
+  "page_table_refreshes": 1,
+  "trace_captures": 10,
+  "prefill_sampling_replays": 25,
+  "token_readbacks": 505,
+  "model_replays": 2795,
+  "sampling_replays": 2795,
+  "history_replays": 2311,
+  "history_readbacks": 133
+ },
+ "qual_last_perf": {
+  "prepare_s": 6.656136199002503,
+  "capture_s": {
+   "1": 0.24346281600446673,
+   "4": 0.2784975949980435,
+   "8": 0.27590022799995495,
+   "None": 0.29195499300112715
+  },
+  "ttft_s": 0.1563826059937128,
+  "decode_steps": 127,
+  "decode_s": 1.2052120380030829,
+  "decode_tok_s_u": 105.37564842982023,
+  "mode": "token_out"
+ },
+ "ar": {
+  "hf_completion": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/hf_completion.txt",
+  "tt_completion": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/tt_completion.txt",
+  "meta": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/autoregressive_meta.json"
+ },
+ "ar_wall_s": 53.77890669699991,
+ "ar_counters": {
+  "sampling_param_refreshes": 13,
+  "history_cursor_refreshes": 172,
+  "position_refreshes": 52,
+  "rope_refreshes": 52,
+  "mask_refreshes": 100,
+  "token_refreshes": 54,
+  "seed_refreshes": 32,
+  "resets": 26,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 68,
+  "page_table_refreshes": 1,
+  "trace_captures": 10,
+  "prefill_sampling_replays": 26,
+  "token_readbacks": 506,
+  "model_replays": 2971,
+  "sampling_replays": 2971,
+  "history_replays": 2487,
+  "history_readbacks": 144
+ },
+ "ar_last_perf": {
+  "prepare_s": 6.656136199002503,
+  "capture_s": {
+   "1": 0.24346281600446673,
+   "4": 0.2784975949980435,
+   "8": 0.27590022799995495,
+   "None": 0.29195499300112715
+  },
+  "ttft_s": 0.14486375699925702,
+  "decode_steps": 176,
+  "decode_s": 1.6714963810009067,
+  "decode_tok_s_u": 105.29487350406924,
+  "mode": "token_out"
+ }
+}

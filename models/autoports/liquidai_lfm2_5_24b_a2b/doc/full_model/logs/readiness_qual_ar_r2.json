@@ -1,0 +1,126 @@
+{
+ "layers": "all",
+ "reference": "bringup/references/lfm2_5_24b_a2b_aime24_chat.refpt",
+ "build_prepare_s": 496.01810348200524,
+ "model_build_s": {
+  "globals_head": 3.424738651003281,
+  "layers": 416.60223792299803
+ },
+ "qual": {
+  "tt_greedy": [
+   "\nWe need to write a haiku about machine learning. Haiku: 5-7-5 syllables. Need to be concise. Let me think of a good one",
+   "\nWe need to explain supervised vs unsupervised learning in simple terms. First person, concrete. No \"as an AI\". Lead wit",
+   "1.  **Analyze the Request:**\n    *   **Prompt:** \"Complete this story: Once upon a time, in a faraway kingdom, there liv",
+   "1.  **Analyze the Request:** The user is asking for the \"three laws of thermodynamics.\" This is a standard physics quest",
+   "The user wants to translate the English sentence \"Hello, how are you today?\" into French.\n\n1.  **Analyze the source sent",
+   "\nOkay, I need to write a Python function to calculate the Fibonacci sequence. Let me think about how the Fibonacci seque"
+  ],
+  "tt_topk": [
+   "\nWe need to write a haiku about machine learning. Haiku: 5-7-5 syllables. Need to be about machine learning. Keep it sim",
+   "We need to answer: \"Explain the difference between supervised and unsupervised learning in simple terms.\"\n\nWe need to pr",
+   "\nOkay, the user wants me to complete the story that starts with \"Once upon a time, in a faraway kingdom, there lived a c",
+   "\nThe user asks: \"What are the three laws of thermodynamics?\" This is a straightforward question. The answer should list ",
+   "1.  **Analyze the Request:**\n    *   Source text: \"Hello, how are you today?\"\n    *   Target language: French.\n\n2.  **Id",
+   "We need to respond with a Python function that calculates the Fibonacci sequence. The user asks: \"Write a Python functio"
+  ],
+  "agreement": {
+   "0": {
+    "first_divergence": 27,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "1": {
+    "first_divergence": 5,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "2": {
+    "first_divergence": 102,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "3": {
+    "first_divergence": 57,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "4": {
+    "first_divergence": 68,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "5": {
+    "first_divergence": 21,
+    "hf_len": 128,
+    "tt_len": 128
+   }
+  }
+ },
+ "qual_wall_s": 16.84597797000606,
+ "qual_counters": {
+  "sampling_param_refreshes": 12,
+  "history_cursor_refreshes": 25,
+  "position_refreshes": 24,
+  "rope_refreshes": 24,
+  "mask_refreshes": 48,
+  "token_refreshes": 24,
+  "seed_refreshes": 18,
+  "resets": 12,
+  "page_table_refreshes": 1,
+  "prefill_chunks": 12,
+  "trace_captures": 4,
+  "prefill_sampling_replays": 12,
+  "token_readbacks": 12,
+  "model_replays": 1524,
+  "sampling_replays": 1524,
+  "history_replays": 1524,
+  "history_readbacks": 12
+ },
+ "qual_last_perf": {
+  "prepare_s": 6.598047204999602,
+  "capture_s": {
+   "1": 0.24663418599811848
+  },
+  "ttft_s": 0.14811536499473732,
+  "decode_steps": 127,
+  "decode_s": 1.200803250001627,
+  "decode_tok_s_u": 105.76253853395876,
+  "mode": "token_out"
+ },
+ "ar": {
+  "hf_completion": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/hf_completion.txt",
+  "tt_completion": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/tt_completion.txt",
+  "meta": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/autoregressive_meta.json"
+ },
+ "ar_wall_s": 56.523132283997256,
+ "ar_counters": {
+  "sampling_param_refreshes": 13,
+  "history_cursor_refreshes": 26,
+  "position_refreshes": 25,
+  "rope_refreshes": 25,
+  "mask_refreshes": 48,
+  "token_refreshes": 25,
+  "seed_refreshes": 18,
+  "resets": 12,
+  "page_table_refreshes": 1,
+  "prefill_chunks": 13,
+  "trace_captures": 4,
+  "prefill_sampling_replays": 13,
+  "token_readbacks": 13,
+  "model_replays": 1779,
+  "sampling_replays": 1779,
+  "history_replays": 1779,
+  "history_readbacks": 13
+ },
+ "ar_last_perf": {
+  "prepare_s": 6.598047204999602,
+  "capture_s": {
+   "1": 0.24663418599811848
+  },
+  "ttft_s": 0.1448272010020446,
+  "decode_steps": 255,
+  "decode_s": 2.4173435630000313,
+  "decode_tok_s_u": 105.48769479979653,
+  "mode": "token_out"
+ }
+}
