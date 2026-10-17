@@ -1,0 +1,106 @@
+{
+ "layers": "all",
+ "reference": "bringup/references/lfm2_5_24b_a2b_aime24_chat.refpt",
+ "build_prepare_s": 186.55699291999917,
+ "model_build_s": {
+  "globals_head": 1.286967687003198,
+  "layers": 107.01252892200137
+ },
+ "precision": {
+  "config_id": "C1_E2",
+  "source": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/doc/datatype_sweep/configs/C1_E2.json"
+ },
+ "qual": {
+  "tt_greedy": [
+   "\nWe need to write a haiku about machine learning. Haiku: 5-7-5 syllables. Need to ensure correct syllable count. Let's t",
+   "\nWe need to explain supervised vs unsupervised learning in simple terms. The user asks for a simple explanation. We shou",
+   "1.  **Analyze the Request:**\n    *   **Prompt:** \"Complete this story: Once upon a time, in a faraway kingdom, there liv",
+   "The user asks: \"What are the three laws of thermodynamics?\" This is a straightforward factual question. The answer: The ",
+   "The user wants to translate the English sentence \"Hello, how are you today?\" into French.\n\n1.  **Analyze the source sent",
+   "The user asks: \"Write a Python function to calculate the Fibonacci sequence.\"\n\nWe need to respond with a Python function"
+  ],
+  "tt_topk": [
+   "\nWe need to write a haiku about machine learning. Haiku: 5-7-5 syllables. Need to ensure it's about machine learning. So",
+   "We need to answer: \"Explain the difference between supervised and unsupervised learning in simple terms.\"\n\nWe need to pr",
+   "The user asks: \"Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who di",
+   "\nThe user asks: \"What are the three laws of thermodynamics?\" This is a straightforward question. The answer should list ",
+   "1.  **Analyze the Request:**\n    *   Source text: \"Hello, how are you today?\"\n    *   Target language: French.\n\n2.  **Id",
+   "We need to respond with a Python function that calculates the Fibonacci sequence. The user request is straightforward: \""
+  ],
+  "agreement": {
+   "0": {
+    "first_divergence": 26,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "1": {
+    "first_divergence": 5,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "2": {
+    "first_divergence": 39,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "3": {
+    "first_divergence": 0,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "4": {
+    "first_divergence": 83,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "5": {
+    "first_divergence": 0,
+    "hf_len": 128,
+    "tt_len": 128
+   }
+  }
+ },
+ "qual_wall_s": 16.149396113993134,
+ "qual_counters": {
+  "sampling_param_refreshes": 12,
+  "history_cursor_refreshes": 109,
+  "position_refreshes": 24,
+  "rope_refreshes": 24,
+  "mask_refreshes": 48,
+  "token_refreshes": 24,
+  "seed_refreshes": 18,
+  "resets": 12,
+  "page_table_refreshes": 1,
+  "prefill_input_refreshes": 132,
+  "prefill_trace_captures": 2,
+  "prefill_replays": 12,
+  "prefill_chunks": 12,
+  "trace_captures": 5,
+  "prefill_sampling_replays": 12,
+  "token_readbacks": 12,
+  "model_replays": 1524,
+  "sampling_replays": 1524,
+  "history_appends": 1524,
+  "history_readbacks": 96,
+  "seed_readbacks": 6
+ },
+ "qual_last_perf": {
+  "prepare_s": 6.731808568001725,
+  "prefill_capture_s": {
+   "(32, False, 'last')": 0.28930953599046916,
+   "(64, False, 'last')": 0.32143046699638944
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(32, False, 'last')": 2211840,
+   "(64, False, 'last')": 2146304
+  },
+  "capture_s": {
+   "1": 0.25599768599204253
+  },
+  "ttft_s": 0.029026532007264905,
+  "decode_steps": 127,
+  "decode_s": 1.1783261520031374,
+  "decode_tok_s_u": 107.78000622671561,
+  "mode": "token_out"
+ }
+}

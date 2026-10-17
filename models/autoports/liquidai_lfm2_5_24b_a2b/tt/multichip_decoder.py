@@ -63,6 +63,12 @@ class MeshPlan:
     # ShortConv decode chain on the out_proj input shards (8 cores x [32, 64]): B / C / x sliced straight from the
     # sharded in_proj output, state / taps / slot mask on the same shards, no S2I / I2S (stage 5 review P1)
     conv_sharded_chain: bool = True
+    # ---- stage 8 (datatype sweep) ----
+    # decode all-reduce payload dtype: the row-parallel partials (attention wo, ShortConv out_proj, dense w2 and, with
+    # ccl_moe, the compact MoE expert sum) are written in this dtype and summed by all_reduce_async into a bf16
+    # residual (doc/optimized_multichip_decoder/sweeps/decode_ccl_dtype_probe.log: bfp8 -2.1 us per all-reduce)
+    ccl_dtype: str = "bf16"
+    ccl_moe: bool = True
 
     def summary(self):
         return {k: getattr(self, k) for k in self.__dataclass_fields__}
@@ -205,7 +211,22 @@ class _PartialOut:
     fp32 did not change the decode router-score error: work_log M-10.)"""
 
     def decode(self, x, ckc, mem=L1):
-        return self.decode_sharded(x, ckc)
+        dt = getattr(self, "partial_dtype", None)  # MeshPlan.ccl_dtype (stage 8)
+        if dt is None:
+            return self.decode_sharded(x, ckc)
+        already = x.memory_config() == self.in_mem
+        xs = x if already else ttnn.to_memory_config(x, self.in_mem)
+        o = ttnn.linear(
+            xs,
+            self.weight,
+            program_config=self.decode_cfg,
+            compute_kernel_config=ckc,
+            memory_config=self.out_mem,
+            dtype=dt,
+        )
+        if not already:
+            ttnn.deallocate(xs)
+        return o
 
 
 def _as_partial(lin):
@@ -437,7 +458,12 @@ class MCMoE(OptimizedMoE):
             ttnn.deallocate(wt)
             down = down_w
         out_mem = self.out_mem if (p.moe_compact_out_sharded and getattr(self, "out_mem", None) is not None) else L1
-        out = ttnn.experimental.fast_reduce_nc(down, dims=[1], memory_config=out_mem)
+        dt = getattr(self, "partial_dtype", None)  # MeshPlan.ccl_dtype with ccl_moe (stage 8): expert sum in that dtype
+        if dt is not None:
+            buf = ttnn.empty((1, 1, T, H), dt, ttnn.TILE_LAYOUT, self.mesh_device, out_mem)
+            out = ttnn.experimental.fast_reduce_nc(down, dims=[1], output=buf, memory_config=out_mem)
+        else:
+            out = ttnn.experimental.fast_reduce_nc(down, dims=[1], memory_config=out_mem)
         ttnn.deallocate(down)
         return ttnn.reshape(out, (1, 1, T, H))
 
@@ -693,17 +719,26 @@ class MeshReduce:
             # cannot complete all-reduce k+1 before every chip has sent its k+1 data, which each sends only after finishing
             # k), so with two buffers a leading chip never overwrites a scratch another chip is still reducing from.
             # Every layer issues 2 all-reduces, so each layer / trace starts on buffer 0.
-            key = (id(mesh_device), hidden, plan.tp, plan.resid_cores)
-            hit = _AR_SCRATCH.get(key)
-            if hit is None or hit[0] is not mesh_device:
-                bufs = [
-                    ttnn.empty(
-                        (1, 1, TILE, hidden * plan.tp), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, self.buf_mem
-                    )
-                    for _ in range(2)
-                ]
-                hit = _AR_SCRATCH[key] = (mesh_device, bufs, [0])
-            self.scratch, self._scratch_idx = hit[1], hit[2]
+            # one pair per payload dtype (MeshPlan.ccl_dtype: partials may arrive bf16 or reduced) with ONE alternation
+            # counter shared by all pairs: consecutive all-reduces always use buffers of different parity (different
+            # physical buffers whatever their dtypes), and every trace issues an even number of all-reduces (2 per layer),
+            # so each trace starts on parity 0 as before
+            key0 = (id(mesh_device), hidden, plan.tp, plan.resid_cores)
+            idx = _AR_SCRATCH.get(key0 + ("idx",))
+            if idx is None or idx[0] is not mesh_device:
+                idx = _AR_SCRATCH[key0 + ("idx",)] = (mesh_device, [0])
+            self._scratch_idx = idx[1]
+            self.scratch = {}
+            for dt in {ttnn.bfloat16, DTYPES[plan.ccl_dtype]}:
+                key = key0 + (str(dt),)
+                hit = _AR_SCRATCH.get(key)
+                if hit is None or hit[0] is not mesh_device:
+                    bufs = [
+                        ttnn.empty((1, 1, TILE, hidden * plan.tp), dt, ttnn.TILE_LAYOUT, mesh_device, self.buf_mem)
+                        for _ in range(2)
+                    ]
+                    hit = _AR_SCRATCH[key] = (mesh_device, bufs)
+                self.scratch[dt] = hit[1]
 
     def decode(self, partial):
         """``partial`` [1, 1, 32, H] (any memory) -> reduced, width-sharded on ``resid_mem``."""
@@ -721,12 +756,12 @@ class MeshReduce:
         # every layer and every bucket trace), else allocated per call inside the trace like any intermediate
         buf = None
         if self.scratch is not None:
-            buf = self.scratch[self._scratch_idx[0]]
+            buf = self.scratch[p.dtype][self._scratch_idx[0]]
             self._scratch_idx[0] ^= 1
         if buf is None:
             buf = ttnn.empty(
                 (1, 1, p.shape[-2], self.H * self.plan.tp),
-                ttnn.bfloat16,
+                p.dtype,
                 ttnn.TILE_LAYOUT,
                 self.mesh_device,
                 self.buf_mem,
@@ -740,6 +775,7 @@ class MeshReduce:
             topology=self.topology,
             num_links=self.plan.num_links,
             memory_config=self.resid_mem,
+            dtype=ttnn.bfloat16,  # residual stays bf16 whatever the payload dtype
         )
         if self.scratch is None:
             ttnn.deallocate(buf)
@@ -843,6 +879,15 @@ class MultichipDecoder(OptimizedDecoder):
             self.ffn.out_mem = (
                 self.resid_mem
             )  # compact expert sum written in the all-reduce layout (moe_compact_out_sharded)
+        if plan.ccl_dtype != "bf16":  # stage 8: reduced decode all-reduce payload
+            dt = DTYPES[plan.ccl_dtype]
+            part = self.mixer.ds_wo if self.is_attention else self.mixer.ds_out
+            part.partial_dtype = dt
+            if isinstance(self.ffn, MCMoE):
+                if plan.ccl_moe:
+                    self.ffn.partial_dtype = dt
+            else:
+                self.ffn.ds_w2_dec.partial_dtype = dt
 
     # ---- decode ----
     def decode_forward(

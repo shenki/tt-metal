@@ -1,0 +1,168 @@
+{
+ "config_id": "H2H1_B0",
+ "policy_overrides": {},
+ "plan_overrides": {},
+ "layer_exceptions": {},
+ "head": {
+  "dtype": "bfp8",
+  "cfg": [
+   64,
+   1,
+   3
+  ],
+  "fidelity": "hifi2"
+ },
+ "policy": {
+  "expert_gate_up": "bfp8",
+  "expert_down": "bfp8",
+  "expert_fidelity": "hifi2",
+  "expert_gate_up_decode": "",
+  "expert_down_decode": "",
+  "attn_qkv": "bfp8",
+  "attn_out": "bfp8",
+  "attn_fidelity": "hifi2",
+  "conv_in": "bfp8",
+  "conv_out": "bfp8",
+  "conv_fidelity": "hifi2",
+  "dense_w13": "bfp8",
+  "dense_w2": "bfp8",
+  "dense_fidelity": "hifi2",
+  "kv_cache": "bfp8",
+  "sdpa_decode_k_chunk": 512,
+  "sdpa_decode_exp_approx": false,
+  "sdpa_decode_fidelity": "hifi4",
+  "sdpa_prefill_chunk": 64,
+  "mask_idle_routing": true,
+  "moe_gate_up_cfg": [
+   8,
+   3,
+   32,
+   1
+  ],
+  "moe_down_cfg": [
+   8,
+   8,
+   12,
+   1
+  ],
+  "moe_gate_up_prefill_cfg": [
+   8,
+   3,
+   8,
+   1
+  ],
+  "moe_down_prefill_cfg": [
+   8,
+   8,
+   12,
+   1
+  ],
+  "moe_decode_l1": true,
+  "ds_wqkv": [
+   8,
+   8,
+   3
+  ],
+  "ds_wo": [
+   8,
+   2,
+   2
+  ],
+  "ds_conv_in": [
+   8,
+   8,
+   2
+  ],
+  "ds_conv_out": [
+   8,
+   2,
+   2
+  ],
+  "ds_dense_w2": [
+   46,
+   2,
+   2
+  ],
+  "ds_dense_w13": [
+   8,
+   8,
+   2
+  ],
+  "ds_dense_w2_decode": [
+   8,
+   6,
+   2
+  ],
+  "sharded_decode_norm": true,
+  "dense_prefill_2d": true,
+  "router_bf16": true,
+  "router_ksplit": 0,
+  "conv_prefill_windowed_tail": true,
+  "dispatch_ffn": "unified",
+  "dispatch_hybrid_threshold": 128,
+  "dispatch_fidelity": "hifi2",
+  "moe_dispatch_min_rows": 96,
+  "moe_dispatch_max_rows": 2048,
+  "ffn_norm_cores": 8,
+  "sdpa_prefill_k_chunk": 512,
+  "sdpa_prefill_fidelity": "hifi2",
+  "moe_scan_multicore": true,
+  "moe_scatter_rows": 32,
+  "moe_out_direct_untilize": true,
+  "prefill_mm_v2": true,
+  "moe_compact_max_users": 4,
+  "moe_gate_up_compact_cfg": [
+   8,
+   3,
+   32,
+   1
+  ],
+  "moe_down_compact_cfg": [
+   8,
+   8,
+   12,
+   1
+  ],
+  "router_ds_cores": 8,
+  "router_kth_slice": false,
+  "decode_residual_l1": false,
+  "moe_route_v3": true,
+  "moe_route_v3_l1": true,
+  "router_ds_fused": true,
+  "attn_heads_sharded": true,
+  "attn_kv_fused_max_bucket": 32,
+  "attn_pad_free": true,
+  "attn_bucket_heads": true,
+  "attn_residual_sharded": false,
+  "attn_concat_persistent": true,
+  "moe_down_small_bucket_cfg": [
+   8,
+   [
+    8,
+    6,
+    12,
+    1
+   ]
+  ],
+  "moe_compact_weight_before_down": true,
+  "moe_compact_out_sharded": true
+ },
+ "plan": {
+  "tp": 4,
+  "num_links": 2,
+  "resid_cores": 8,
+  "decode_reduce": "all_reduce_async",
+  "prefill_reduce": "all_reduce",
+  "persistent_scratch": true,
+  "moe_sharded_input": true,
+  "dense_w13_packed": [
+   32,
+   2,
+   3
+  ],
+  "conv_sharded_chain": true,
+  "ccl_dtype": "bf16",
+  "ccl_moe": true
+ },
+ "note": "interleaved head-to-head round 1 of B0 (same session, alternating order)"
+}

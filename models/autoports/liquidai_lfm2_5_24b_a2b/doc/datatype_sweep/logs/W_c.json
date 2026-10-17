@@ -1,0 +1,347 @@
+{
+ "config": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/doc/datatype_sweep/configs/W_c.json",
+ "build_prepare_s": 478.37821457799873,
+ "model_build_s": {
+  "globals_head": 6.160842113007675,
+  "layers": 393.7964391669957
+ },
+ "weight_cache": null,
+ "precision": {
+  "config_id": "W_c",
+  "source": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/doc/datatype_sweep/configs/W_c.json",
+  "policy": {
+   "expert_gate_up": "bfp8",
+   "expert_down": "bfp8",
+   "expert_fidelity": "hifi2",
+   "expert_gate_up_decode": "",
+   "expert_down_decode": "",
+   "attn_qkv": "bfp8",
+   "attn_out": "bfp8",
+   "attn_fidelity": "hifi2",
+   "conv_in": "bfp4",
+   "conv_out": "bfp8",
+   "conv_fidelity": "lofi",
+   "dense_w13": "bfp8",
+   "dense_w2": "bfp8",
+   "dense_fidelity": "hifi2",
+   "kv_cache": "bfp8",
+   "sdpa_decode_k_chunk": 512,
+   "sdpa_decode_exp_approx": false,
+   "sdpa_decode_fidelity": "hifi4",
+   "sdpa_prefill_chunk": 64,
+   "mask_idle_routing": true,
+   "moe_gate_up_cfg": [
+    8,
+    3,
+    32,
+    1
+   ],
+   "moe_down_cfg": [
+    8,
+    8,
+    12,
+    1
+   ],
+   "moe_gate_up_prefill_cfg": [
+    8,
+    3,
+    8,
+    1
+   ],
+   "moe_down_prefill_cfg": [
+    8,
+    8,
+    12,
+    1
+   ],
+   "moe_decode_l1": true,
+   "ds_wqkv": [
+    8,
+    8,
+    3
+   ],
+   "ds_wo": [
+    8,
+    2,
+    2
+   ],
+   "ds_conv_in": [
+    8,
+    8,
+    2
+   ],
+   "ds_conv_out": [
+    8,
+    2,
+    2
+   ],
+   "ds_dense_w2": [
+    46,
+    2,
+    2
+   ],
+   "ds_dense_w13": [
+    8,
+    8,
+    2
+   ],
+   "ds_dense_w2_decode": [
+    8,
+    6,
+    2
+   ],
+   "sharded_decode_norm": true,
+   "dense_prefill_2d": true,
+   "router_bf16": true,
+   "router_ksplit": 0,
+   "conv_prefill_windowed_tail": true,
+   "dispatch_ffn": "unified",
+   "dispatch_hybrid_threshold": 128,
+   "dispatch_fidelity": "hifi2",
+   "moe_dispatch_min_rows": 96,
+   "moe_dispatch_max_rows": 2048,
+   "ffn_norm_cores": 8,
+   "sdpa_prefill_k_chunk": 512,
+   "sdpa_prefill_fidelity": "hifi2",
+   "moe_scan_multicore": true,
+   "moe_scatter_rows": 32,
+   "moe_out_direct_untilize": true,
+   "prefill_mm_v2": true,
+   "moe_compact_max_users": 4,
+   "moe_gate_up_compact_cfg": [
+    8,
+    3,
+    32,
+    1
+   ],
+   "moe_down_compact_cfg": [
+    8,
+    8,
+    12,
+    1
+   ],
+   "router_ds_cores": 8,
+   "router_kth_slice": false,
+   "decode_residual_l1": false,
+   "moe_route_v3": true,
+   "moe_route_v3_l1": true,
+   "router_ds_fused": true,
+   "attn_heads_sharded": true,
+   "attn_kv_fused_max_bucket": 32,
+   "attn_pad_free": true,
+   "attn_bucket_heads": true,
+   "attn_residual_sharded": false,
+   "attn_concat_persistent": true,
+   "moe_down_small_bucket_cfg": [
+    8,
+    [
+     8,
+     6,
+     12,
+     1
+    ]
+   ],
+   "moe_compact_weight_before_down": true,
+   "moe_compact_out_sharded": true
+  },
+  "plan": {
+   "tp": 4,
+   "num_links": 2,
+   "resid_cores": 8,
+   "decode_reduce": "all_reduce_async",
+   "prefill_reduce": "all_reduce",
+   "persistent_scratch": true,
+   "moe_sharded_input": true,
+   "dense_w13_packed": [
+    32,
+    2,
+    3
+   ],
+   "conv_sharded_chain": true,
+   "ccl_dtype": "bfp8",
+   "ccl_moe": true
+  },
+  "layer_exceptions": {
+   "0": {
+    "conv_fidelity": "hifi2"
+   },
+   "1": {
+    "conv_fidelity": "hifi2"
+   }
+  },
+  "head": {
+   "dtype": "bfp8",
+   "cfg": [
+    64,
+    1,
+    3
+   ],
+   "fidelity": "hifi2"
+  }
+ },
+ "prefill": [
+  {
+   "top1": 0.99,
+   "top5": 1.0,
+   "top100": 1.0,
+   "matches_top1": 99,
+   "matches_top5": 100,
+   "matches_top100": 100,
+   "total": 100,
+   "k": 100
+  }
+ ],
+ "tf_first": [
+  {
+   "top1": 0.99,
+   "top5": 1.0,
+   "top100": 1.0,
+   "matches_top1": 99,
+   "matches_top5": 100,
+   "matches_top100": 100,
+   "total": 100,
+   "k": 100,
+   "elapsed_s": 1.7626761909923516,
+   "e2e_t/s/u": 56.73191736010344,
+   "ttft_ms": 813.2420369947795,
+   "decode_tokens": 99.0,
+   "decode_elapsed_s": 0.949171957996441,
+   "decode_t/s/u": 104.30143786482492
+  }
+ ],
+ "tf": [
+  {
+   "top1": 0.99,
+   "top5": 1.0,
+   "top100": 1.0,
+   "matches_top1": 99,
+   "matches_top5": 100,
+   "matches_top100": 100,
+   "total": 100,
+   "k": 100,
+   "elapsed_s": 1.0221548639965476,
+   "e2e_t/s/u": 97.83253352530909,
+   "ttft_ms": 71.65357300254982,
+   "decode_tokens": 99.0,
+   "decode_elapsed_s": 0.9502823439979693,
+   "decode_t/s/u": 104.17956371102646
+  }
+ ],
+ "tf_counters": {
+  "position_refreshes": 1,
+  "rope_refreshes": 1,
+  "token_refreshes": 2,
+  "prefill_input_refreshes": 11,
+  "prefill_chunks": 1,
+  "prefill_replays": 1,
+  "prefill_sampling_replays": 1,
+  "token_readbacks": 100,
+  "model_replays": 99,
+  "sampling_replays": 99
+ },
+ "tf_last_perf": {
+  "prepare_s": 7.018313615000807,
+  "prefill_capture_s": {
+   "(256, False, 'last')": 0.4924683599965647,
+   "(128, False, 'last')": 0.49970875699364115
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(256, False, 'last')": 3809280,
+   "(128, False, 'last')": 3645440
+  },
+  "capture_s": {
+   "1": 0.24967466600355692
+  },
+  "ttft_s": 0.07121077900228556,
+  "decode_steps": 99,
+  "decode_s": 0.9495015230058925,
+  "decode_tok_s_u": 104.2652356012973,
+  "mode": "teacher_forcing"
+ },
+ "tf_ext": {
+  "lfm2_5_24b_a2b_aime24_chat_p1.refpt": [
+   {
+    "top1": 0.98,
+    "top5": 1.0,
+    "top100": 1.0,
+    "matches_top1": 98,
+    "matches_top5": 100,
+    "matches_top100": 100,
+    "total": 100,
+    "k": 100,
+    "elapsed_s": 1.031788799999049,
+    "e2e_t/s/u": 96.91905940449458,
+    "ttft_ms": 77.7045560098486,
+    "decode_tokens": 99.0,
+    "decode_elapsed_s": 0.9538371969974833,
+    "decode_t/s/u": 103.79129720631059
+   }
+  ],
+  "lfm2_5_24b_a2b_aime24_chat_p2.refpt": [
+   {
+    "top1": 0.96,
+    "top5": 1.0,
+    "top100": 1.0,
+    "matches_top1": 96,
+    "matches_top5": 100,
+    "matches_top100": 100,
+    "total": 100,
+    "k": 100,
+    "elapsed_s": 1.5244250270043267,
+    "e2e_t/s/u": 65.59850319206035,
+    "ttft_ms": 568.1150920136133,
+    "decode_tokens": 99.0,
+    "decode_elapsed_s": 0.9560603680001805,
+    "decode_t/s/u": 103.54994654477855
+   }
+  ],
+  "lfm2_5_24b_a2b_aime24_chat_p3.refpt": [
+   {
+    "top1": 0.98,
+    "top5": 1.0,
+    "top100": 1.0,
+    "matches_top1": 98,
+    "matches_top5": 100,
+    "matches_top100": 100,
+    "total": 100,
+    "k": 100,
+    "elapsed_s": 1.0233691860048566,
+    "e2e_t/s/u": 97.71644619317806,
+    "ttft_ms": 69.02697699842975,
+    "decode_tokens": 99.0,
+    "decode_elapsed_s": 0.9540993920090841,
+    "decode_t/s/u": 103.76277443331334
+   }
+  ]
+ },
+ "memory": {
+  "DRAM": {
+   "total_bytes_per_bank": 4171678080,
+   "allocated_bytes_per_bank": 3110771008,
+   "free_bytes_per_bank": 1060907072,
+   "largest_contiguous_free_per_bank": 1048088192,
+   "num_banks": 8
+  },
+  "L1": {
+   "total_bytes_per_bank": 1436544,
+   "allocated_bytes_per_bank": 259328,
+   "free_bytes_per_bank": 1177216,
+   "largest_contiguous_free_per_bank": 1131904,
+   "num_banks": 110
+  },
+  "TRACE": {
+   "total_bytes_per_bank": 100663296,
+   "allocated_bytes_per_bank": 9669632,
+   "free_bytes_per_bank": 90993664,
+   "largest_contiguous_free_per_bank": 90993664,
+   "num_banks": 8
+  },
+  "dram_allocated_gib_per_chip": 23.17705011367798,
+  "dram_total_gib_per_chip": 31.08142375946045,
+  "kv_blocks": 65537,
+  "kv_block_size": 64,
+  "captured_buckets": [
+   "1"
+  ]
+ }
+}

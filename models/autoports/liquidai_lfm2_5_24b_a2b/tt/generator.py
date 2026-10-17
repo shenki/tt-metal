@@ -822,7 +822,14 @@ def build_generator(
         raise ValueError("mesh_device is required")
     if tuple(mesh_device.shape) != (1, 4):
         raise ValueError(f"LFM2.5-24B-A2B runs on a 1x4 mesh, got {tuple(mesh_device.shape)}")
-    key = (id(mesh_device), tuple(layer_indices or ()), host_sampling, sampling_strategy, max_seq_len)
+    key = (
+        id(mesh_device),
+        tuple(layer_indices or ()),
+        host_sampling,
+        sampling_strategy,
+        max_seq_len,
+        str(kwargs.get("precision")),
+    )
     if shared and key in SHARED_GENERATORS:
         return SHARED_GENERATORS[key]
     model = Lfm2Model(mesh_device, layer_indices=layer_indices, max_seq_len=max_seq_len, **kwargs)

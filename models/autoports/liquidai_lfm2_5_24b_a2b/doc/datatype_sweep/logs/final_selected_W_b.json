@@ -1,0 +1,525 @@
+{
+ "layers": "all",
+ "reference": "bringup/references/lfm2_5_24b_a2b_aime24_chat.refpt",
+ "build_prepare_s": 176.29904714300937,
+ "model_build_s": {
+  "globals_head": 1.2139479209872661,
+  "layers": 98.31046754200361
+ },
+ "precision": {
+  "config_id": "W_b",
+  "source": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/doc/datatype_sweep/selected_precision_config.json"
+ },
+ "prefill": [
+  {
+   "top1": 0.99,
+   "top5": 1.0,
+   "top100": 1.0,
+   "matches_top1": 99,
+   "matches_top5": 100,
+   "matches_top100": 100,
+   "total": 100,
+   "k": 100
+  }
+ ],
+ "prefill_wall_s": 1.7413953420036705,
+ "prefill_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 2,
+  "position_refreshes": 1,
+  "rope_refreshes": 1,
+  "mask_refreshes": 2,
+  "token_refreshes": 1,
+  "seed_refreshes": 1,
+  "resets": 1,
+  "prefill_input_refreshes": 11,
+  "prefill_eager_chunks": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 1
+ },
+ "prefill_last_perf": {
+  "prepare_s": 6.831814555989695
+ },
+ "tf": [
+  {
+   "top1": 0.98,
+   "top5": 1.0,
+   "top100": 1.0,
+   "matches_top1": 98,
+   "matches_top5": 100,
+   "matches_top100": 100,
+   "total": 100,
+   "k": 100,
+   "elapsed_s": 1.78873744700104,
+   "e2e_t/s/u": 55.90535389509395,
+   "ttft_ms": 837.7056610042928,
+   "decode_tokens": 99.0,
+   "decode_elapsed_s": 0.9507858300057705,
+   "decode_t/s/u": 104.12439571107107
+  }
+ ],
+ "tf_wall_s": 1.791765033005504,
+ "tf_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 2,
+  "position_refreshes": 2,
+  "rope_refreshes": 2,
+  "mask_refreshes": 4,
+  "token_refreshes": 4,
+  "seed_refreshes": 1,
+  "resets": 1,
+  "prefill_input_refreshes": 22,
+  "prefill_eager_chunks": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 2,
+  "page_table_refreshes": 1,
+  "prefill_trace_captures": 1,
+  "prefill_replays": 1,
+  "trace_captures": 5,
+  "prefill_sampling_replays": 1,
+  "token_readbacks": 100,
+  "model_replays": 99,
+  "sampling_replays": 99
+ },
+ "tf_last_perf": {
+  "prepare_s": 6.831814555989695,
+  "prefill_capture_s": {
+   "(256, False, 'last')": 0.5180511539947474,
+   "(32, False, 'last')": 0.30060560700076167,
+   "(64, False, 'last')": 0.32772826800646726,
+   "(128, False, 'last')": 0.508790677995421,
+   "(1024, False, 'last')": 0.6142615610006033,
+   "(2048, False, 'last')": 0.6297807939990889,
+   "(2048, False, 'none')": 0.6357339270034572,
+   "(2048, True, 'none')": 0.6045981439965544,
+   "(32, True, 'last')": 0.3007662989984965
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(256, False, 'last')": 3809280,
+   "(32, False, 'last')": 2211840,
+   "(64, False, 'last')": 2146304,
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840
+  },
+  "capture_s": {
+   "1": 0.24887480601319112,
+   "4": 0.3326537319953786,
+   "8": 0.33113313499779906,
+   "None": 0.3390145090088481
+  },
+  "ttft_s": 0.8371532580058556,
+  "decode_steps": 99,
+  "decode_s": 0.950168939991272,
+  "decode_tok_s_u": 104.19199768928395,
+  "mode": "teacher_forcing"
+ },
+ "memory": {
+  "DRAM": {
+   "total_bytes_per_bank": 4171678080,
+   "allocated_bytes_per_bank": 2752141632,
+   "free_bytes_per_bank": 1419536448,
+   "largest_contiguous_free_per_bank": 1413314176,
+   "num_banks": 8
+  },
+  "L1": {
+   "total_bytes_per_bank": 1436544,
+   "allocated_bytes_per_bank": 259328,
+   "free_bytes_per_bank": 1177216,
+   "largest_contiguous_free_per_bank": 1131904,
+   "num_banks": 110
+  },
+  "TRACE": {
+   "total_bytes_per_bank": 100663296,
+   "allocated_bytes_per_bank": 6024192,
+   "free_bytes_per_bank": 94639104,
+   "largest_contiguous_free_per_bank": 94639104,
+   "num_banks": 8
+  },
+  "dram_allocated_gib_per_chip": 20.50505304336548,
+  "dram_total_gib_per_chip": 31.08142375946045,
+  "kv_blocks": 65537,
+  "kv_block_size": 64,
+  "captured_buckets": [
+   "1"
+  ]
+ },
+ "memory_wall_s": 0.007026837003650144,
+ "memory_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 2,
+  "position_refreshes": 2,
+  "rope_refreshes": 2,
+  "mask_refreshes": 4,
+  "token_refreshes": 4,
+  "seed_refreshes": 1,
+  "resets": 1,
+  "prefill_input_refreshes": 22,
+  "prefill_eager_chunks": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 2,
+  "page_table_refreshes": 1,
+  "prefill_trace_captures": 1,
+  "prefill_replays": 1,
+  "trace_captures": 5,
+  "prefill_sampling_replays": 1,
+  "token_readbacks": 100,
+  "model_replays": 99,
+  "sampling_replays": 99
+ },
+ "memory_last_perf": {
+  "prepare_s": 6.831814555989695,
+  "prefill_capture_s": {
+   "(256, False, 'last')": 0.5180511539947474,
+   "(32, False, 'last')": 0.30060560700076167,
+   "(64, False, 'last')": 0.32772826800646726,
+   "(128, False, 'last')": 0.508790677995421,
+   "(1024, False, 'last')": 0.6142615610006033,
+   "(2048, False, 'last')": 0.6297807939990889,
+   "(2048, False, 'none')": 0.6357339270034572,
+   "(2048, True, 'none')": 0.6045981439965544,
+   "(32, True, 'last')": 0.3007662989984965
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(256, False, 'last')": 3809280,
+   "(32, False, 'last')": 2211840,
+   "(64, False, 'last')": 2146304,
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840
+  },
+  "capture_s": {
+   "1": 0.24887480601319112,
+   "4": 0.3326537319953786,
+   "8": 0.33113313499779906,
+   "None": 0.3390145090088481
+  },
+  "ttft_s": 0.8371532580058556,
+  "decode_steps": 99,
+  "decode_s": 0.950168939991272,
+  "decode_tok_s_u": 104.19199768928395,
+  "mode": "teacher_forcing"
+ },
+ "qual": {
+  "tt_greedy": [
+   "\nWe need to write a haiku about machine learning. Haiku: 5-7-5 syllables. Need to ensure correct syllable count. Let's t",
+   "\nWe need to explain supervised vs unsupervised learning in simple terms. The user asks for a simple explanation. We shou",
+   "1.  **Analyze the Request:**\n    *   **Prompt:** \"Complete this story: Once upon a time, in a faraway kingdom, there liv",
+   "The user asks: \"What are the three laws of thermodynamics?\" This is a straightforward factual question. The answer: The ",
+   "1.  **Analyze the Request:**\n    *   Source text: \"Hello, how are you today?\"\n    *   Target language: French.\n\n2.  **Id",
+   "The user asks: \"Write a Python function to calculate the Fibonacci sequence.\"\n\nWe need to respond with a Python function"
+  ],
+  "tt_topk": [
+   "\nWe need to write a haiku about machine learning. A haiku is a three-line poem with syllable pattern 5-7-5. Must be abou",
+   "\nWe need to explain supervised vs unsupervised learning in simple terms. First person. Keep it clear, maybe with analogi",
+   "\nOkay, the user wants me to complete the story that starts with \"Once upon a time, in a faraway kingdom, there lived a c",
+   "\nThe user asks: \"What are the three laws of thermodynamics?\" This is a straightforward question. The answer should list ",
+   "The user wants to translate the English sentence \"Hello, how are you today?\" into French.\n\n1.  **Analyze the source sent",
+   "\nOkay, I need to write a Python function to calculate the Fibonacci sequence. Hmm, let's think about what the Fibonacci "
+  ],
+  "agreement": {
+   "0": {
+    "first_divergence": 26,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "1": {
+    "first_divergence": 5,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "2": {
+    "first_divergence": 83,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "3": {
+    "first_divergence": 0,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "4": {
+    "first_divergence": 0,
+    "hf_len": 128,
+    "tt_len": 128
+   },
+   "5": {
+    "first_divergence": 0,
+    "hf_len": 128,
+    "tt_len": 128
+   }
+  }
+ },
+ "qual_wall_s": 15.79059104899352,
+ "qual_counters": {
+  "sampling_param_refreshes": 12,
+  "history_cursor_refreshes": 110,
+  "position_refreshes": 26,
+  "rope_refreshes": 26,
+  "mask_refreshes": 52,
+  "token_refreshes": 28,
+  "seed_refreshes": 19,
+  "resets": 13,
+  "prefill_input_refreshes": 154,
+  "prefill_eager_chunks": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 14,
+  "page_table_refreshes": 1,
+  "prefill_trace_captures": 3,
+  "prefill_replays": 13,
+  "trace_captures": 5,
+  "prefill_sampling_replays": 13,
+  "token_readbacks": 112,
+  "model_replays": 1623,
+  "sampling_replays": 1623,
+  "history_appends": 1524,
+  "history_readbacks": 96,
+  "seed_readbacks": 6
+ },
+ "qual_last_perf": {
+  "prepare_s": 6.831814555989695,
+  "prefill_capture_s": {
+   "(256, False, 'last')": 0.5180511539947474,
+   "(32, False, 'last')": 0.30060560700076167,
+   "(64, False, 'last')": 0.32772826800646726,
+   "(128, False, 'last')": 0.508790677995421,
+   "(1024, False, 'last')": 0.6142615610006033,
+   "(2048, False, 'last')": 0.6297807939990889,
+   "(2048, False, 'none')": 0.6357339270034572,
+   "(2048, True, 'none')": 0.6045981439965544,
+   "(32, True, 'last')": 0.3007662989984965
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(256, False, 'last')": 3809280,
+   "(32, False, 'last')": 2211840,
+   "(64, False, 'last')": 2146304,
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840
+  },
+  "capture_s": {
+   "1": 0.24887480601319112,
+   "4": 0.3326537319953786,
+   "8": 0.33113313499779906,
+   "None": 0.3390145090088481
+  },
+  "ttft_s": 0.027732743008527905,
+  "decode_steps": 127,
+  "decode_s": 1.1681322430085856,
+  "decode_tok_s_u": 108.72056717902493,
+  "mode": "token_out"
+ },
+ "ar": {
+  "hf_completion": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/hf_completion.txt",
+  "tt_completion": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/tt_completion.txt",
+  "meta": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/readiness_autoregressive/autoregressive_meta.json"
+ },
+ "ar_wall_s": 60.39333901400096,
+ "ar_counters": {
+  "sampling_param_refreshes": 13,
+  "history_cursor_refreshes": 126,
+  "position_refreshes": 27,
+  "rope_refreshes": 27,
+  "mask_refreshes": 52,
+  "token_refreshes": 29,
+  "seed_refreshes": 19,
+  "resets": 13,
+  "prefill_input_refreshes": 165,
+  "prefill_eager_chunks": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 15,
+  "page_table_refreshes": 1,
+  "prefill_trace_captures": 3,
+  "prefill_replays": 14,
+  "trace_captures": 5,
+  "prefill_sampling_replays": 14,
+  "token_readbacks": 113,
+  "model_replays": 1878,
+  "sampling_replays": 1878,
+  "history_appends": 1779,
+  "history_readbacks": 112,
+  "seed_readbacks": 6
+ },
+ "ar_last_perf": {
+  "prepare_s": 6.831814555989695,
+  "prefill_capture_s": {
+   "(256, False, 'last')": 0.5180511539947474,
+   "(32, False, 'last')": 0.30060560700076167,
+   "(64, False, 'last')": 0.32772826800646726,
+   "(128, False, 'last')": 0.508790677995421,
+   "(1024, False, 'last')": 0.6142615610006033,
+   "(2048, False, 'last')": 0.6297807939990889,
+   "(2048, False, 'none')": 0.6357339270034572,
+   "(2048, True, 'none')": 0.6045981439965544,
+   "(32, True, 'last')": 0.3007662989984965
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(256, False, 'last')": 3809280,
+   "(32, False, 'last')": 2211840,
+   "(64, False, 'last')": 2146304,
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840
+  },
+  "capture_s": {
+   "1": 0.24887480601319112,
+   "4": 0.3326537319953786,
+   "8": 0.33113313499779906,
+   "None": 0.3390145090088481
+  },
+  "ttft_s": 0.07212211299338378,
+  "decode_steps": 255,
+  "decode_s": 2.3493220919917803,
+  "decode_tok_s_u": 108.54194955609866,
+  "mode": "token_out"
+ },
+ "perf": {
+  "workload": "batch 1, prompt 128 / generate 128, greedy",
+  "first_request_ttft_ms": 573.3389910019469,
+  "token_out_counters_per_request": {
+   "history_cursor_refreshes": 1,
+   "position_refreshes": 1,
+   "rope_refreshes": 1,
+   "mask_refreshes": 2,
+   "token_refreshes": 1,
+   "prefill_input_refreshes": 11,
+   "prefill_chunks": 1,
+   "prefill_replays": 1,
+   "prefill_sampling_replays": 1,
+   "token_readbacks": 1,
+   "model_replays": 127,
+   "sampling_replays": 127,
+   "history_appends": 127,
+   "history_readbacks": 1
+  },
+  "ttft_ms": 64.2319070029771,
+  "token_out_tok_s_u": 109.45724545824686,
+  "token_out_ms_step": 9.135987259805987,
+  "teacher_forcing_tok_s_u": 104.85431930138718,
+  "teacher_forcing_ms_step": 9.53704155119884,
+  "ttft_ms_by_prompt_len": {
+   "128": 65.3067629900761,
+   "1024": 96.7200419981964,
+   "2048": 134.57492699672002,
+   "4100": 294.43155199987814
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(256, False, 'last')": 3809280,
+   "(32, False, 'last')": 2211840,
+   "(64, False, 'last')": 2146304,
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840
+  },
+  "prefill_capture_s": {
+   "(256, False, 'last')": 0.5180511539947474,
+   "(32, False, 'last')": 0.30060560700076167,
+   "(64, False, 'last')": 0.32772826800646726,
+   "(128, False, 'last')": 0.508790677995421,
+   "(1024, False, 'last')": 0.6142615610006033,
+   "(2048, False, 'last')": 0.6297807939990889,
+   "(2048, False, 'none')": 0.6357339270034572,
+   "(2048, True, 'none')": 0.6045981439965544,
+   "(32, True, 'last')": 0.3007662989984965
+  },
+  "logits_only_ms_step": 8.925555419991724,
+  "sampling_only_ms_step": 0.31461388993193395,
+  "model_plus_sampling_ms_step": 9.239916810038267,
+  "batch_token_out_ms_step": {
+   "1": 9.126952406177224,
+   "4": 12.263416265568594,
+   "8": 18.323687250131115,
+   "32": 24.710443156209294
+  },
+  "trace_region_used": {
+   "largest_contiguous_bytes_free_per_bank": 60273664,
+   "num_banks": 8,
+   "total_bytes_allocated_per_bank": 40389632,
+   "total_bytes_free_per_bank": 60273664,
+   "total_bytes_per_bank": 100663296
+  },
+  "token_out_eos_polling_tok_s_u": 108.64924916181752,
+  "force_argmax": {
+   "token_out_tok_s_u": 102.96898017084945,
+   "sampling_only_ms_step": 0.8698152500437573,
+   "same_tokens_as_split_greedy": true
+  }
+ },
+ "perf_wall_s": 37.95873667800333,
+ "perf_counters": {
+  "sampling_param_refreshes": 13,
+  "history_cursor_refreshes": 189,
+  "position_refreshes": 86,
+  "rope_refreshes": 86,
+  "mask_refreshes": 168,
+  "token_refreshes": 88,
+  "seed_refreshes": 49,
+  "resets": 43,
+  "prefill_input_refreshes": 1023,
+  "prefill_eager_chunks": 1,
+  "full_logits_readbacks": 1,
+  "prefill_chunks": 93,
+  "page_table_refreshes": 1,
+  "prefill_trace_captures": 9,
+  "prefill_replays": 92,
+  "trace_captures": 14,
+  "prefill_sampling_replays": 43,
+  "token_readbacks": 523,
+  "model_replays": 3193,
+  "sampling_replays": 3193,
+  "history_appends": 2709,
+  "history_readbacks": 145,
+  "seed_readbacks": 6
+ },
+ "perf_last_perf": {
+  "prepare_s": 6.831814555989695,
+  "prefill_capture_s": {
+   "(256, False, 'last')": 0.5180511539947474,
+   "(32, False, 'last')": 0.30060560700076167,
+   "(64, False, 'last')": 0.32772826800646726,
+   "(128, False, 'last')": 0.508790677995421,
+   "(1024, False, 'last')": 0.6142615610006033,
+   "(2048, False, 'last')": 0.6297807939990889,
+   "(2048, False, 'none')": 0.6357339270034572,
+   "(2048, True, 'none')": 0.6045981439965544,
+   "(32, True, 'last')": 0.3007662989984965
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(256, False, 'last')": 3809280,
+   "(32, False, 'last')": 2211840,
+   "(64, False, 'last')": 2146304,
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840
+  },
+  "capture_s": {
+   "1": 0.24887480601319112,
+   "4": 0.3326537319953786,
+   "8": 0.33113313499779906,
+   "None": 0.3390145090088481
+  },
+  "ttft_s": 0.06537378201028332,
+  "decode_steps": 127,
+  "decode_s": 1.1607178509875666,
+  "decode_tok_s_u": 109.41504853392695,
+  "mode": "token_out"
+ }
+}

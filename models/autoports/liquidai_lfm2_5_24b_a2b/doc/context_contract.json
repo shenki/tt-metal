@@ -268,5 +268,25 @@
       4100
     ],
     "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/optimized_full_model/logs/test_full_model_tracker_r2.log"
+  },
+  "datatype_sweep": {
+    "selected_config": "C1 (doc/datatype_sweep/selected_precision_config.json)",
+    "current_supported_context": 131072,
+    "capability_reduction": null,
+    "decode_batch": 32,
+    "kv_cache_dtype": "bfp8 (unchanged from stage 3-7)",
+    "kv_layout_change": null,
+    "measured_per_chip_gib": {
+      "dram_capacity_with_768mib_trace_region": 31.081,
+      "dram_allocated_full_model_32x131072_kv": 23.22,
+      "kv_blocks": 65537,
+      "kv_block_size": 64
+    },
+    "measurement": "readiness_driver memory run on the default (selected) construction path -> doc/datatype_sweep/logs/final_selected.json",
+    "non_aligned_prompts": "tests/test_full_model.py test_prefill_lengths [1, 31, 33, 65, 77, 300, 2047, 2049, 4100] pass on the selected config (doc/datatype_sweep/logs/test_full_model_tracker_selected.log)",
+    "kv_candidates": "K1 (BFP4 KV) evaluated in the sweep; not selected, so capacity is unchanged. BF16 KV at 32 x 131072 does not fit (33.9 > 31.08 GiB/chip).",
+    "persistent_allocation_changes": [
+      "one extra persistent [32, 8192] BFP8 all_reduce_async L1 scratch pair per mesh (per payload dtype) for the BFP8 decode CCL payload"
+    ]
   }
 }

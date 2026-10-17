@@ -35,9 +35,25 @@ import ttnn
 from .functional_decoder import DRAM, TILE, ConvPrefillInputs, _as_tt, _hifi4
 from .fused_decoder import DEFAULT_FUSIONS, make_rope
 from .model_config import Lfm2MoeArgs, load_hf_config
-from .multichip_decoder import DEFAULT_MESH_PLAN, MC_POLICY, MultichipDecoder, _ds_host, _shard_like
+from .multichip_decoder import MultichipDecoder, _ds_host, _shard_like
 from .optimized_decoder import DTYPES, DramShardedLinear, ShardedNorm, _ckc
 from .weights import WeightCache, load_global_state_dict, load_layer_state_dict
+
+
+def weight_signature(policy):
+    """``repr`` of the policy without the fields that do not change device weight contents / layouts (compute
+    fidelities, KV-cache dtype, SDPA settings): fidelity-only precision candidates share a weight cache."""
+    from dataclasses import fields
+
+    keep = {
+        f.name: getattr(policy, f.name)
+        for f in fields(policy)
+        if not (
+            f.name.endswith("_fidelity") or f.name in ("kv_cache", "mask_idle_routing") or f.name.startswith("sdpa_")
+        )
+    }
+    return repr(sorted(keep.items()))
+
 
 BLOCK_SIZE = 64  # paged KV block (tokens)
 PAGE_TABLE_ALIGN = 8  # page-table rows are a multiple of 32 bytes
@@ -126,21 +142,38 @@ class Lfm2Model:
         model_path=None,
         hf_config=None,
         layer_indices=None,
-        policy=MC_POLICY,
-        plan=DEFAULT_MESH_PLAN,
+        policy=None,
+        plan=None,
         fusions=DEFAULT_FUSIONS,
         max_batch_size=TILE,
         max_seq_len=None,
-        head_dtype="bfp8",
-        head_cfg=HEAD_CFG,
-        head_fidelity="hifi2",
+        head_dtype=None,
+        head_cfg=None,
+        head_fidelity=None,
         weight_cache=None,
+        precision=None,
     ):
-        """``weight_cache``: directory of the device-weight cache (``weights.WeightCache``); default
+        """Precision: ``precision`` (``tt.precision.PrecisionConfig`` / JSON path / "baseline") or, by default,
+        ``tt.precision.resolve()`` = ``$LFM2_PRECISION_CONFIG`` -> ``doc/datatype_sweep/selected_precision_config.json`` ->
+        the stage-7 baseline; explicit ``policy`` / ``plan`` / ``head_*`` arguments override it (decoder-level tests).
+        ``weight_cache``: directory of the device-weight cache (``weights.WeightCache``); default
         ``$LFM2_WEIGHT_CACHE`` or ``~/.cache/tt_autoport_weights/lfm2_5_24b_a2b``; ``LFM2_WEIGHT_CACHE=0`` / ``False``
         disables it."""
         from .model_config import HF_REVISION, resolve_model_path
+        from .precision import resolve
 
+        pc = resolve(precision)
+        if policy is not None:
+            pc.policy, pc.layer_exceptions, pc.source = policy, {}, f"{pc.source} + explicit policy"
+        if plan is not None:
+            pc.plan, pc.source = plan, f"{pc.source} + explicit plan"
+        for k, v in (("dtype", head_dtype), ("cfg", head_cfg), ("fidelity", head_fidelity)):
+            if v is not None:
+                pc.head[k] = tuple(v) if k == "cfg" else v
+        self.precision = pc
+        self.precision_source = pc.source
+        policy, plan = pc.policy, pc.plan
+        head_dtype, head_cfg, head_fidelity = pc.head["dtype"], pc.head["cfg"], pc.head["fidelity"]
         assert tuple(mesh_device.shape) == (1, plan.tp), f"mesh {tuple(mesh_device.shape)} != (1, {plan.tp})"
         assert max_batch_size == TILE, "the decoder stack is built for 32 physical slots"
         t0 = time.perf_counter()
@@ -165,7 +198,7 @@ class Lfm2Model:
         logger.info(
             f"Lfm2Model: {len(self.layers)} layers {self.layer_indices if len(self.layers) < 40 else '0..39'}, "
             f"build {self.build_s['globals_head']:.1f} s globals/head + {self.build_s['layers']:.1f} s layers, "
-            f"weight cache {self.weight_cache}"
+            f"weight cache {self.weight_cache}, precision {pc.config_id} ({pc.source})"
         )
 
     def _weight_cache(self, root, revision, head_dtype, head_cfg, head_fidelity, batch):
@@ -177,10 +210,14 @@ class Lfm2Model:
             return None
         key = WeightCache.key_for(
             revision=revision,
-            policy=repr(self.policy),
+            # weight-defining fields only: fidelities / KV dtype / SDPA settings do not change weight bytes
+            policy=weight_signature(self.policy),
+            layer_exceptions={
+                k: weight_signature(self.precision.policy_for_layer(k)) for k in self.precision.layer_exceptions
+            },
             plan=repr(self.plan),
             fusions=sorted(self.fusions),
-            head=(head_dtype, tuple(head_cfg), head_fidelity),
+            head=(head_dtype, tuple(head_cfg)),
             mesh=tuple(self.mesh.shape),
             batch=batch,
             max_seq_len=self.max_seq_len,
@@ -208,6 +245,10 @@ class Lfm2Model:
         shards = [emb_pad[d * nl : (d + 1) * nl].T.contiguous() for d in range(self.tp)]
         self.head = DramShardedLinear(mesh_device, shards[0], DTYPES[head_dtype], head_cfg, policy.prefill_mm_v2)
         self.head.weight = _shard_like(self.head.weight, [_ds_host(self.head, w) for w in shards], dim=-1)
+        if head_dtype == "bfp4":
+            # bfp4 tiles let prefill_2d_config pick larger in1 blocks under its 1.3 MB CB budget; next to the stage-8
+            # bfp8 all-reduce scratch pair that clashed with persistent L1 (doc/datatype_sweep/logs/probe_risky_smoke.log)
+            self.head.prefill_l1_budget = 1_200_000
         self.head_ckc = _ckc(mesh_device, head_fidelity)
         self.head_dtype, self.head_cfg = head_dtype, head_cfg
         del g, emb, emb_pad, shards
@@ -226,7 +267,7 @@ class Lfm2Model:
                     layer_idx=i,
                     mesh_device=mesh_device,
                     max_batch_size=max_batch_size,
-                    policy=policy,
+                    policy=self.precision.policy_for_layer(i),
                     fusions=self.fusions,
                     plan=plan,
                 )

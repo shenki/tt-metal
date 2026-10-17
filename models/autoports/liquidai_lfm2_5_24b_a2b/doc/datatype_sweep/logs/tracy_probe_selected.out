@@ -1,0 +1,3 @@
+TRACY probe prefill: 4222.6 us device per prefill (285 op rows)
+TRACY probe decode: 1036.6 us device per step (870 op rows)
+TRACY probe decode_b8: 1619.2 us device per step (870 op rows)

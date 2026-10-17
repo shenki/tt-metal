@@ -55,6 +55,9 @@ def main():
     ap.add_argument("--ar-out", type=Path, default=MODEL_DIR / "readiness_autoregressive")
     ap.add_argument("--json", type=Path, default=None, help="write the results here")
     ap.add_argument("--trace-region-mb", type=int, default=768)
+    ap.add_argument(
+        "--precision", default=None, help="precision config JSON or 'baseline' (default: tt.precision.resolve())"
+    )
     a = ap.parse_args()
 
     from readiness_check.run_autoregressive import DEFAULT_PROMPT_FILE, run_autoregressive
@@ -68,6 +71,8 @@ def main():
 
     layers = None if a.layers is None else [int(x) for x in a.layers.split(",")]
     build_kwargs = dict(shared=True, layer_indices=layers)
+    if a.precision:
+        build_kwargs["precision"] = a.precision
     mesh = open_mesh(a.trace_region_mb << 20)
     results = {"layers": layers or "all", "reference": str(a.reference)}
     try:
@@ -75,6 +80,7 @@ def main():
         gen = build_generator(model_dir=MODEL_DIR, mesh_device=mesh, **build_kwargs)
         results["build_prepare_s"] = time.perf_counter() - t0
         results["model_build_s"] = gen.model.build_s
+        results["precision"] = {"config_id": gen.model.precision.config_id, "source": gen.model.precision_source}
         for run in a.runs.split(","):
             t = time.perf_counter()
             if run == "prefill":

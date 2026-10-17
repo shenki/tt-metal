@@ -1,0 +1,333 @@
+{
+ "config_id": "W_b",
+ "policy_overrides": {
+  "conv_in": "bfp4",
+  "conv_fidelity": "lofi",
+  "expert_gate_up_decode": "bfp4",
+  "expert_down_decode": "bfp4",
+  "expert_fidelity": "lofi"
+ },
+ "plan_overrides": {
+  "ccl_dtype": "bfp8"
+ },
+ "layer_exceptions": {
+  "0": {
+   "conv_fidelity": "hifi2"
+  },
+  "1": {
+   "conv_fidelity": "hifi2"
+  }
+ },
+ "head": {
+  "dtype": "bfp8",
+  "cfg": [
+   64,
+   1,
+   3
+  ],
+  "fidelity": "hifi2"
+ },
+ "policy": {
+  "expert_gate_up": "bfp8",
+  "expert_down": "bfp8",
+  "expert_fidelity": "lofi",
+  "expert_gate_up_decode": "bfp4",
+  "expert_down_decode": "bfp4",
+  "attn_qkv": "bfp8",
+  "attn_out": "bfp8",
+  "attn_fidelity": "hifi2",
+  "conv_in": "bfp4",
+  "conv_out": "bfp8",
+  "conv_fidelity": "lofi",
+  "dense_w13": "bfp8",
+  "dense_w2": "bfp8",
+  "dense_fidelity": "hifi2",
+  "kv_cache": "bfp8",
+  "sdpa_decode_k_chunk": 512,
+  "sdpa_decode_exp_approx": false,
+  "sdpa_decode_fidelity": "hifi4",
+  "sdpa_prefill_chunk": 64,
+  "mask_idle_routing": true,
+  "moe_gate_up_cfg": [
+   8,
+   3,
+   32,
+   1
+  ],
+  "moe_down_cfg": [
+   8,
+   8,
+   12,
+   1
+  ],
+  "moe_gate_up_prefill_cfg": [
+   8,
+   3,
+   8,
+   1
+  ],
+  "moe_down_prefill_cfg": [
+   8,
+   8,
+   12,
+   1
+  ],
+  "moe_decode_l1": true,
+  "ds_wqkv": [
+   8,
+   8,
+   3
+  ],
+  "ds_wo": [
+   8,
+   2,
+   2
+  ],
+  "ds_conv_in": [
+   8,
+   8,
+   2
+  ],
+  "ds_conv_out": [
+   8,
+   2,
+   2
+  ],
+  "ds_dense_w2": [
+   46,
+   2,
+   2
+  ],
+  "ds_dense_w13": [
+   8,
+   8,
+   2
+  ],
+  "ds_dense_w2_decode": [
+   8,
+   6,
+   2
+  ],
+  "sharded_decode_norm": true,
+  "dense_prefill_2d": true,
+  "router_bf16": true,
+  "router_ksplit": 0,
+  "conv_prefill_windowed_tail": true,
+  "dispatch_ffn": "unified",
+  "dispatch_hybrid_threshold": 128,
+  "dispatch_fidelity": "hifi2",
+  "moe_dispatch_min_rows": 96,
+  "moe_dispatch_max_rows": 2048,
+  "ffn_norm_cores": 8,
+  "sdpa_prefill_k_chunk": 512,
+  "sdpa_prefill_fidelity": "hifi2",
+  "moe_scan_multicore": true,
+  "moe_scatter_rows": 32,
+  "moe_out_direct_untilize": true,
+  "prefill_mm_v2": true,
+  "moe_compact_max_users": 4,
+  "moe_gate_up_compact_cfg": [
+   8,
+   3,
+   32,
+   1
+  ],
+  "moe_down_compact_cfg": [
+   8,
+   8,
+   12,
+   1
+  ],
+  "router_ds_cores": 8,
+  "router_kth_slice": false,
+  "decode_residual_l1": false,
+  "moe_route_v3": true,
+  "moe_route_v3_l1": true,
+  "router_ds_fused": true,
+  "attn_heads_sharded": true,
+  "attn_kv_fused_max_bucket": 32,
+  "attn_pad_free": true,
+  "attn_bucket_heads": true,
+  "attn_residual_sharded": false,
+  "attn_concat_persistent": true,
+  "moe_down_small_bucket_cfg": [
+   8,
+   [
+    8,
+    6,
+    12,
+    1
+   ]
+  ],
+  "moe_compact_weight_before_down": true,
+  "moe_compact_out_sharded": true
+ },
+ "plan": {
+  "tp": 4,
+  "num_links": 2,
+  "resid_cores": 8,
+  "decode_reduce": "all_reduce_async",
+  "prefill_reduce": "all_reduce",
+  "persistent_scratch": true,
+  "moe_sharded_input": true,
+  "dense_w13_packed": [
+   32,
+   2,
+   3
+  ],
+  "conv_sharded_chain": true,
+  "ccl_dtype": "bfp8",
+  "ccl_moe": true
+ },
+ "note": "C1 + X1 + E3",
+ "schema_version": 1,
+ "model": "LiquidAI/LFM2.5-24B-A2B",
+ "revision": "1769516ac588c4c558089c94f27d96b0dc67b183",
+ "weight_groups": {
+  "attn_qkv": {
+   "dtype": "bfp8",
+   "fidelity": "hifi2",
+   "layers": "10 attention layers"
+  },
+  "attn_out": {
+   "dtype": "bfp8",
+   "fidelity": "hifi2",
+   "layers": "10 attention layers"
+  },
+  "conv_in": {
+   "dtype": "bfp4",
+   "fidelity": "lofi",
+   "layers": "30 ShortConv layers; layers 0, 1 fidelity hifi2 (layer_exceptions)"
+  },
+  "conv_out": {
+   "dtype": "bfp8",
+   "fidelity": "lofi",
+   "layers": "30 ShortConv layers; layers 0, 1 fidelity hifi2"
+  },
+  "dense_w13": {
+   "dtype": "bfp8",
+   "fidelity": "hifi2",
+   "layers": "layers 0, 1"
+  },
+  "dense_w2": {
+   "dtype": "bfp8",
+   "fidelity": "hifi2",
+   "layers": "layers 0, 1"
+  },
+  "expert_gate_up_decode": {
+   "dtype": "bfp4",
+   "fidelity": "lofi",
+   "layers": "38 MoE layers, decode stacked copy"
+  },
+  "expert_down_decode": {
+   "dtype": "bfp4",
+   "fidelity": "lofi",
+   "layers": "38 MoE layers, decode stacked copy"
+  },
+  "expert_gate_up_prefill": {
+   "dtype": "bfp8",
+   "fidelity": "hifi2",
+   "layers": "38 MoE layers, prefill dispatch copy"
+  },
+  "expert_down_prefill": {
+   "dtype": "bfp8",
+   "fidelity": "hifi2",
+   "layers": "38 MoE layers, prefill dispatch copy"
+  },
+  "router": {
+   "dtype": "bf16",
+   "fidelity": "bf16 x bf16, fp32 accumulation (router_bf16, DS router)",
+   "layers": "38 MoE layers"
+  },
+  "embedding": {
+   "dtype": "bf16",
+   "layout": "row-major replicated [128000, 2048]"
+  },
+  "lm_head": {
+   "dtype": "bfp8",
+   "fidelity": "hifi2",
+   "cfg": [
+    64,
+    1,
+    3
+   ],
+   "layout": "vocab-parallel DRAM-sharded [2048, 32256] per chip"
+  }
+ },
+ "activations": {
+  "residual": "bf16 width-sharded L1 [32, 2048] on 8 cores (decode), DRAM interleaved (prefill)",
+  "norms": "bf16 weights, HiFi4 fp32 accumulation",
+  "moe_intermediates": "bf16 L1",
+  "sdpa_decode": {
+   "fidelity": "hifi4",
+   "k_chunk": 512
+  },
+  "sdpa_prefill": {
+   "fidelity": "hifi2",
+   "q_chunk": 64,
+   "k_chunk_cap": 512
+  }
+ },
+ "ccl": {
+  "decode_all_reduce_payload": "bfp8",
+  "decode_payload_groups": "attention wo, ShortConv out_proj, dense w2, MoE compact expert sum (buckets <= 4); MoE b > 4 expert sum stays bf16",
+  "decode_all_reduce_output": "bf16",
+  "prefill_all_reduce_payload": "bf16 (composite all_reduce; 32-row chunks use the decode path)",
+  "scratch": "one persistent [32, 8192] L1 pair per payload dtype, one shared alternation counter"
+ },
+ "kv_cache": {
+  "dtype": "bfp8",
+  "block_size": 64,
+  "layout": "paged [blocks, 2 local kv heads, 64, 64] per chip",
+  "update_input_dtype": "bf16"
+ },
+ "logits_sampling": {
+  "lm_head_output": "bf16 DRAM [32, 32256] per chip (vocab-parallel)",
+  "sampling": "TTSampling split (local top-32, stable top-k, all-gather of candidates, ttnn.sampling); greedy = k1 p0 temp1; padded-vocab tail mask",
+  "history": "uint32"
+ },
+ "runtime_flags": {
+  "consumption": "tt/precision.py resolve(): LFM2_PRECISION_CONFIG (path | baseline) else this file else baseline; Lfm2Model / build_generator default",
+  "trace_region_mb": 768,
+  "l1_small": 24576
+ },
+ "baseline_escape": "LFM2_PRECISION_CONFIG=baseline",
+ "selected_from": {
+  "config_id": "W_b",
+  "rows": [
+   "W_b",
+   "H2H1_W_b",
+   "H2H2_W_b",
+   "H2H3_W_b"
+  ],
+  "rule": "fastest traced teacher-forcing decode (median over repeats; interleaved head-to-head with B0 / C1 / W_e) among configs passing main + extended gates; W_e (+ BFP4 LM head) median 104.83 vs W_b 104.67 t/s/u = within the 0.5 % tie band -> the simpler config (BFP8 LM head), which also keeps the stage-6 probe test bars (W_e: prefill PCC 0.989 < 0.99, batch top-5 71/72); user decision 2026-10-18"
+ },
+ "accuracy": {
+  "main": {
+   "top1": 0.98,
+   "top5": 1.0,
+   "top100": 1.0
+  },
+  "extended_400_tokens": {
+   "top1": 0.985,
+   "top5": 1.0,
+   "top100": 1.0
+  },
+  "prefill": {
+   "top1": 0.99,
+   "top5": 1.0,
+   "top100": 1.0
+  }
+ },
+ "performance": {
+  "tf_decode_t_s_u_runs": [
+   104.7279702384582,
+   104.6191303139604,
+   104.88706966501447,
+   104.00720613191389
+  ],
+  "tf_decode_t_s_u_median": 104.6735502762093,
+  "regime": "readiness run_teacher_forcing (traced bucket-1 decode, token-out sampling path, per-step token readback), batch 1, AIME24 chat-template refs (main idx 0: 157-token prompt + 100 tokens; extended idx 1-3), 1x4 TP4, trace region 768 MiB",
+  "post_selection_token_out": "doc/datatype_sweep/logs/final_selected.json perf (filled below after the run)"
+ }
+}

@@ -1,0 +1,12 @@
+== precision test
+precision exit 0
+== driver
+driver exit 0
+== tracker
+tracker exit 1
+== tracy
+tracy exit 0
+rows exit 0
+== weight cache
+wc exit 0
+ALLDONE

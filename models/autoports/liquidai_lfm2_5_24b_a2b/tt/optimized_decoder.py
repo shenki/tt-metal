@@ -286,7 +286,7 @@ class ShardedNorm:
         return y
 
 
-def prefill_2d_config(mesh_device, m, k, n, v2=False, w_tile_bytes=2048, dram_sharded_w=False):
+def prefill_2d_config(mesh_device, m, k, n, v2=False, w_tile_bytes=2048, dram_sharded_w=False, l1_budget=1_300_000):
     """2D-mcast matmul config for large-M prefill over the full compute grid (works with
     interleaved and DRAM-width-sharded weights)."""
     grid = mesh_device.compute_with_storage_grid_size()
@@ -294,11 +294,13 @@ def prefill_2d_config(mesh_device, m, k, n, v2=False, w_tile_bytes=2048, dram_sh
     gy, gx = min(grid.y, mt), min(grid.x, nt)
     per_core_m, per_core_n = math.ceil(mt / gy), math.ceil(nt / gx)
     if v2:
-        return _prefill_2d_config_v2(gx, gy, kt, per_core_m, per_core_n, w_tile_bytes, full_w=dram_sharded_w)
+        return _prefill_2d_config_v2(
+            gx, gy, kt, per_core_m, per_core_n, w_tile_bytes, full_w=dram_sharded_w, budget=l1_budget
+        )
     # circular buffers must fit L1: double-buffered bf16 in0 / (<= bf16) in1 blocks, and the bf16
     # output block with its fp32 partials; shrink the output block (divisors of the per-core tile
     # counts) first, then in0_block_w
-    budget = 1_300_000
+    budget = l1_budget
     divs = lambda v: [d for d in range(v, 0, -1) if v % d == 0]
     legal_bw = [b for b in (8, 4, 2, 1) if kt % b == 0]
     choice = None
@@ -332,11 +334,10 @@ def prefill_2d_config(mesh_device, m, k, n, v2=False, w_tile_bytes=2048, dram_sh
     )
 
 
-def _prefill_2d_config_v2(gx, gy, kt, per_core_m, per_core_n, w_tile_bytes, full_w=False):
+def _prefill_2d_config_v2(gx, gy, kt, per_core_m, per_core_n, w_tile_bytes, full_w=False, budget=1_300_000):
     """Largest output block first (fewer partial-output spills), then the largest in0_block_w that
     fits; in1 blocks sized by the weight dtype; subblock widths up to 3/4 (<= 4 tiles with fp32 acc).
     Measured (repro/r2_prefill_ops_bench.py mm, 2048 rows): qkv 230 -> 166 us, conv_in 553 -> 330 us."""
-    budget = 1_300_000
     divs = lambda v: [d for d in range(v, 0, -1) if v % d == 0]
     legal_bw = [b for b in (8, 4, 2, 1) if kt % b == 0]
     blocks = sorted(((h, w) for h in divs(per_core_m) for w in divs(per_core_n)), key=lambda hw: -hw[0] * hw[1])
@@ -474,7 +475,14 @@ class DramShardedLinear:
         m = x.shape[-2]
         if m not in self._prefill_cfgs:
             self._prefill_cfgs[m] = prefill_2d_config(
-                self.mesh_device, m, self.k, self.n, self.prefill_v2, self.w_tile_bytes, dram_sharded_w=True
+                self.mesh_device,
+                m,
+                self.k,
+                self.n,
+                self.prefill_v2,
+                self.w_tile_bytes,
+                dram_sharded_w=True,
+                l1_budget=getattr(self, "prefill_l1_budget", 1_300_000),
             )
         return ttnn.linear(
             x, self.weight, program_config=self._prefill_cfgs[m], compute_kernel_config=ckc, memory_config=mem

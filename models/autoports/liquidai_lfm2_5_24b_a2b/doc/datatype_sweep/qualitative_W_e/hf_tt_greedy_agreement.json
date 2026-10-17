@@ -1,0 +1,32 @@
+{
+ "0": {
+  "first_divergence": 26,
+  "hf_len": 128,
+  "tt_len": 128
+ },
+ "1": {
+  "first_divergence": 5,
+  "hf_len": 128,
+  "tt_len": 128
+ },
+ "2": {
+  "first_divergence": 83,
+  "hf_len": 128,
+  "tt_len": 128
+ },
+ "3": {
+  "first_divergence": 0,
+  "hf_len": 128,
+  "tt_len": 128
+ },
+ "4": {
+  "first_divergence": 0,
+  "hf_len": 128,
+  "tt_len": 128
+ },
+ "5": {
+  "first_divergence": 0,
+  "hf_len": 128,
+  "tt_len": 128
+ }
+}

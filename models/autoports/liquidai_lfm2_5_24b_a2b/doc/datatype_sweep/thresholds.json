@@ -1,0 +1,34 @@
+{
+ "top1_min": 0.9,
+ "top5_min": 0.98,
+ "top100_min": 1.0,
+ "scopes": [
+  "main (AIME24 idx 0, 100 tokens)",
+  "extended aggregate (AIME24 idx 0-3, 400 tokens)"
+ ],
+ "source": "goal: top-5 >= 98 %, top-100 = 100 %; top-1 >= 90 % = datatype-sweep skill default when the user gives no top-1 bar; user decision 2026-10-18: the same bars also over the 400-token extended set (binding), extended aggregate breaks ties",
+ "tie_band_pct": 0.5,
+ "selection_rule_v2": {
+  "date": "2026-10-18",
+  "decided_after": "W_b broke 4 stage-6 probe bars on short prompts; Fable advisor (option 2, narrowed) + user lean",
+  "rule": "fastest config by median traced TF over head-to-head rows that satisfies (a) main + extended AIME gates, (b) the UNCHANGED stage-6/7 probe suite (tests/test_full_model.py) under the trace tracker, (c) stage-7 first-token parity on the 6-prompt qualitative suite (first_divergence > 0 on every prompt); ties within 0.5 % -> simpler config",
+  "why_c": "chat prompts <= 64 tokens prefill entirely through the decode (compact) experts (optimized_decoder.py T<=32 compact / T<96 no dispatch copy); the 157-token AIME gate prompts never exercise that path",
+  "candidates": [
+   "C1_E2",
+   "C1_E2_x (layers 2, 39 experts bfp8)",
+   "C1_E3_x (optional)"
+  ],
+  "fallback": "C1",
+  "rejected": {
+   "W_e": "(b) 11/28 probe tests fail incl. prefill PCC < 0.99; (c) first token differs on prompts 3-5",
+   "W_b": "(b) test_prefill_lengths n=1/31/33/65 fail; (c) first token differs on prompts 3-5",
+   "W_a": "not screened; inferred: contains C1_E2 (fails c) and H1 (head PCC drop)",
+   "W_d": "(b) via E3 (n=1, n=33 fail)",
+   "W_c": "(b) via X1 (n=65 fails)",
+   "C1_E2": "(c) first token differs on prompts 3, 5",
+   "X1": "(b) n=65 fails",
+   "E3": "(b) n=1, n=33 fail"
+  },
+  "selected": "C1"
+ }
+}

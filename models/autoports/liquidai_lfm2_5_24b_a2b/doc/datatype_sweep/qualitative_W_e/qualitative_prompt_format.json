@@ -1,0 +1,17 @@
+{
+ "hf_model_id": "LiquidAI/LFM2.5-24B-A2B",
+ "hf_revision": "1769516ac588c4c558089c94f27d96b0dc67b183",
+ "tokenizer_class": "TokenizersBackend",
+ "chat_template_present": true,
+ "chat_template_sha256": "ea663864491de7ade391839479860ca95541f892f72665c73251fbd4643b1bef",
+ "prompt_mode": "chat",
+ "rendering": "tokenizer.apply_chat_template([{'role': 'user', 'content': p}], add_generation_prompt=True)",
+ "prompt_source": "readiness_check/vllm_prompts.txt (blank-line separated)",
+ "max_new_tokens": 128,
+ "stop": "<|im_end|> (eos 124900)",
+ "runs": {
+  "hf_greedy": "HF generate, CPU bf16, do_sample=False, repetition_penalty=1.0",
+  "tt_greedy": "TT generate, split sampling k=1 p=0 temp=1 (token-out traced decode)",
+  "tt_topk": "TT generate, top_k=20 top_p=0.9 temperature=0.7 seed=1234"
+ }
+}

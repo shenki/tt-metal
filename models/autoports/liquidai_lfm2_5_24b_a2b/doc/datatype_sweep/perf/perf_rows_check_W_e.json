@@ -1,0 +1,96 @@
+{
+ "LM head 32 x 2048 x 32256": {
+  "rows": 5,
+  "weight_dtype": [
+   "BFLOAT4_B"
+  ],
+  "math_fidelity": [
+   "HiFi2"
+  ],
+  "expected": [
+   "BFLOAT4_B",
+   "hifi2"
+  ],
+  "ok": true
+ },
+ "expert gate/up (sparse, decode)": {
+  "rows": 10,
+  "weight_dtype": [
+   "BFLOAT4_B"
+  ],
+  "math_fidelity": [
+   "LoFi"
+  ],
+  "expected": [
+   "BFLOAT4_B",
+   "lofi"
+  ],
+  "ok": true
+ },
+ "expert down (sparse, decode)": {
+  "rows": 10,
+  "weight_dtype": [
+   "BFLOAT4_B"
+  ],
+  "math_fidelity": [
+   "LoFi"
+  ],
+  "expected": [
+   "BFLOAT4_B",
+   "lofi"
+  ],
+  "ok": true
+ },
+ "attention qkv 32 x 2048 x 768": {
+  "rows": 5,
+  "weight_dtype": [
+   "BFLOAT8_B"
+  ],
+  "math_fidelity": [
+   "HiFi2"
+  ],
+  "expected": [
+   "BFLOAT8_B",
+   "hifi2"
+  ],
+  "ok": true
+ },
+ "ShortConv in_proj 32 x 2048 x 1536 (layers 0 + 3)": {
+  "rows": 10,
+  "weight_dtype": [
+   "BFLOAT4_B"
+  ],
+  "math_fidelity": [
+   "HiFi2",
+   "LoFi"
+  ],
+  "expected": [
+   "BFLOAT4_B",
+   "HiFi2/LoFi"
+  ],
+  "ok": true
+ },
+ "dense w13 32 x 2048 x 6144": {
+  "rows": 5,
+  "weight_dtype": [
+   "BFLOAT8_B"
+  ],
+  "math_fidelity": [
+   "HiFi2"
+  ],
+  "expected": [
+   "BFLOAT8_B",
+   "hifi2"
+  ],
+  "ok": true
+ },
+ "decode all-reduce payload": {
+  "rows": 30,
+  "payload_dtypes": [
+   "BFLOAT8_B"
+  ],
+  "expected": "BFLOAT8_B (bucket-1 decode: every partial incl. the MoE compact sum)",
+  "ok": true
+ },
+ "all_ok": true
+}
