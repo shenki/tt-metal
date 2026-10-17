@@ -110,3 +110,6 @@ Result: 18 passed with `TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKI
 ## F-10 stage review round 2 (same Fable reviewer): clean-pass
 All round-1 required work and concerns verified fixed; doc-only follow-ups applied (context-contract log pointer ->
 tracker r2, README sampler numbers -> final_r2, note that prepare() zeroes a bound cache).
+
+## Commit
+* tt-metal `autoport/lfm2_5_24b_a2b`: stage 6 = 6227a175 (post-commit mesh smoke 1x4 clean); local only, not pushed.
