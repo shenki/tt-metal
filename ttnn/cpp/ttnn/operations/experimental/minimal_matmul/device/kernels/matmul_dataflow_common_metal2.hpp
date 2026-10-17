@@ -12,6 +12,10 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#ifdef DYNAMIC_M_MAILBOX
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#endif
 
 // in0's K is read from TWO source buffers via the in3 path: either the AG local pre-gather slice
 // (READ_FROM_LOCAL_INPUT) or a plain fused concatenation of two operands (IN0_VIRTUAL_CONCAT).
@@ -20,6 +24,87 @@
 #if defined(READ_FROM_LOCAL_INPUT) || defined(IN0_VIRTUAL_CONCAT)
 #define IN0_HAS_SECOND_SOURCE 1
 #endif
+
+FORCE_INLINE uint32_t out_tile_index(uint32_t i, uint32_t j, uint32_t row_tiles) {
+#ifdef OUT_HEAD_SPLIT
+    return (j / OUT_HEAD_TILES) * OUT_HEAD_STRIDE_TILES + i * OUT_HEAD_TILES + (j % OUT_HEAD_TILES);
+#else
+    return i * row_tiles + j;
+#endif
+}
+
+#ifdef DYNAMIC_M
+template <typename AccessorT>
+FORCE_INLINE uint32_t read_scalar_u32(const AccessorT& accessor, uint32_t l1_addr) {
+    Noc noc;
+    noc.async_read(accessor, CoreLocalMem<uint8_t>(l1_addr), sizeof(uint32_t), {.page_id = 0}, {});
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    return CoreLocalMem<volatile uint32_t>(l1_addr)[0];
+}
+
+// min(round_up(ceil(valid_rows / divisor) * multiplier + addend, align), cap_rows), saturating instead of
+// wrapping.
+FORCE_INLINE uint32_t bounded_valid_rows(
+    uint32_t valid_rows, uint32_t divisor, uint32_t multiplier, uint32_t addend, uint32_t align, uint32_t cap_rows) {
+    const uint64_t units = valid_rows / divisor + (valid_rows % divisor != 0 ? 1 : 0);
+    const uint64_t rows = (units * multiplier + addend + align - 1) / align * align;
+    return rows < cap_rows ? static_cast<uint32_t>(rows) : cap_rows;
+}
+
+// This core's share of a runtime-bounded M.
+struct DynamicMRows {
+    uint32_t valid_tiles;  // tiles holding the bounded valid rows, at most M_tiles
+    uint32_t start_tile;
+    uint32_t end_tile;
+    uint32_t num_blocks;
+};
+
+// Shared by the in0 and in1 kernels so both walk the same rows: reads the row count from valid_rows_accessor (staged
+// through scratch_addr), bounds it (bounded_valid_rows, capped at M_tiles), rounds up to tiles, and splits the tiles
+// evenly over the M-parallel cores. The per-core tile and block counts are uniform across cores, which the relay
+// handshakes need. The DYNAMIC_M_MAILBOX instance (one per core) hands the per-core tile count to the compute threads.
+template <uint32_t M_tiles, uint32_t M_parallel_cores, uint32_t M_block_tiles, typename AccessorT>
+FORCE_INLINE DynamicMRows dynamic_m_rows(
+    const AccessorT& valid_rows_accessor,
+    uint32_t scratch_addr,
+    uint32_t divisor,
+    uint32_t multiplier,
+    uint32_t addend,
+    uint32_t align,
+    uint32_t M_core_idx) {
+    const uint32_t valid_rows = bounded_valid_rows(
+        read_scalar_u32(valid_rows_accessor, scratch_addr), divisor, multiplier, addend, align, M_tiles * 32);
+    DynamicMRows rows;
+    rows.valid_tiles = (valid_rows + 31) / 32;
+    const uint32_t M_tiles_rt = (rows.valid_tiles + M_parallel_cores - 1) / M_parallel_cores;
+    rows.start_tile = M_tiles_rt * M_core_idx;
+    rows.end_tile = rows.start_tile + M_tiles_rt;
+    rows.num_blocks = (M_tiles_rt + M_block_tiles - 1) / M_block_tiles;
+#ifdef DYNAMIC_M_MAILBOX
+    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, M_tiles_rt);
+    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, M_tiles_rt);
+    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, M_tiles_rt);
+#endif
+    return rows;
+}
+#endif
+
+// Role-agnostic calls on a kernel_lib mcast pipe: kernel_main is not a template, so a discarded if-constexpr branch
+// would still be checked against the other role's pipe type.
+template <bool IS_SENDER, typename Pipe>
+FORCE_INLINE void mcast_pipe_receive(Pipe& pipe) {
+    if constexpr (!IS_SENDER) {
+        pipe.receive();
+    }
+}
+
+template <bool IS_SENDER, typename Pipe>
+FORCE_INLINE void mcast_pipe_send(Pipe& pipe, uint32_t l1_addr, uint32_t size_bytes) {
+    if constexpr (IS_SENDER) {
+        pipe.send(l1_addr, l1_addr, size_bytes);
+    }
+}
 
 template <typename DFB>
 inline void fill_zeros_async(const Noc& noc, const DFB& dfb, uint32_t bytes, uint32_t offset_bytes = 0) {
@@ -104,7 +189,11 @@ void read_in0_block_sync(
                 }
 #else
                 {
+#ifdef IN0_ROW_TILES
+                    uint32_t tile_id = i * IN0_ROW_TILES + j;
+#else
                     uint32_t tile_id = i * shape.logical_d1 + j;
+#endif
                     noc.async_read(
                         tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 }
@@ -190,7 +279,7 @@ void write_block_sync(
                 read_ptr += tile_size_bytes;
                 continue;
             }
-            uint32_t tile_id = i * shape.logical_d1 + j;
+            uint32_t tile_id = out_tile_index(i, j, shape.logical_d1);
             noc.async_write(
                 CoreLocalMem<uint32_t>(read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
             read_ptr += tile_size_bytes;
@@ -347,7 +436,7 @@ void write_block_sync_granular(
                 if (n_tile_id >= shape.logical_d1) {
                     break;
                 }
-                uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
+                uint32_t tile_id = out_tile_index(m_tile, n_tile_id, shape.logical_d1);
                 noc.async_write(
                     CoreLocalMem<uint32_t>(out_read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
                 out_read_ptr += tile_size_bytes;
