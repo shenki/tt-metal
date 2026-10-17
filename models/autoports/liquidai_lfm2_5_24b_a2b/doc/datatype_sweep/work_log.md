@@ -52,3 +52,11 @@ during the sweep.
   separate the configs; the rounds ran in the same fixed order each time.
 - Weight caches: 11 keys, ~395 GB under `~/.cache/tt_autoport_weights/lfm2_5_24b_a2b`.
 - Every sweep row passes the accuracy gate, so the selection is decided by speed and by rule-v2 (b) and (c).
+
+## Commits
+
+| repo | branch | commit | content |
+|---|---|---|---|
+| tt-metal | `autoport/lfm2_5_24b_a2b` | `8f19e3e2` | stage 8 code + evidence (pre-commit reformat: black / autoflake / whitespace only) |
+
+Post-commit device smoke on `8f19e3e2`: `tests/test_precision_config.py` 2 passed (`logs/test_precision_config_postcommit.log.xz`). Not pushed.
