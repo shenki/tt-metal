@@ -110,7 +110,13 @@ def run_case(
         u.tt_prefill = run_prefill(decoder, rope, mesh_device, layout, u, chunk_size)
 
     # ---- decode: all slots each step (inactive slots get cur_pos -1 / garbage rows) ----
-    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq, active_slots=active_slots)
+    inp = DecodeInputs(
+        mesh_device,
+        H,
+        layout.max_blocks_per_seq,
+        active_slots=active_slots,
+        slot_mask_width=getattr(decoder, "slot_mask_width", None),
+    )
     table = layout.decode_table(users)
     steps = max(u.decode_steps for u in users)
     trace_id = None
@@ -336,7 +342,12 @@ def run_interleaved(mesh_device, layer_idx, fg_users, *, chunk_size, decoder_fac
         tmp = User(slot=SCRATCH_SLOT, prompt_len=u.prompt_len, decode_steps=0, seed=0, x=u.x, blocks=scratch.blocks)
         run_prefill(decoder, rope, mesh_device, layout, tmp, chunk_size)
 
-    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq)
+    inp = DecodeInputs(
+        mesh_device,
+        H,
+        layout.max_blocks_per_seq,
+        slot_mask_width=getattr(decoder, "slot_mask_width", None),
+    )
     garbage = torch.Generator().manual_seed(99)
     active = []  # users decoding on the next replay
     step = {id(u): 0 for u in users}

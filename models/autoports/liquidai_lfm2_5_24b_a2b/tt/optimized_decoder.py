@@ -481,7 +481,7 @@ def _add_residual(out, residual, policy=None):
     return h
 
 
-_ZERO_ROWS = {}  # device id -> (device, DRAM zeros [1, 1, 32, NH*HD]) shared by all layers
+_ZERO_ROWS = {}  # (device id, rows, NH*HD) -> (device, DRAM zeros [1, 1, rows, NH*HD]) shared by all layers
 
 
 class OptimizedAttention(FusedAttention):
@@ -611,7 +611,8 @@ class OptimizedAttention(FusedAttention):
     def _concat_out_buf(self, mem):
         """Zeroed L1 concat-heads output.  Not persistent in L1: the prefill hybrid routed-expert op
         claims the whole L1 bank as its arena, so a DRAM zeros tensor is copied in per call."""
-        hit = _ZERO_ROWS.get(id(self.mesh_device))
+        key = (id(self.mesh_device), self.B, self.NH * self.HD)  # shape too: decoders with other head counts
+        hit = _ZERO_ROWS.get(key)
         if hit is None or hit[0] is not self.mesh_device:
             import torch
 
@@ -623,7 +624,7 @@ class OptimizedAttention(FusedAttention):
                 memory_config=DRAM,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            hit = _ZERO_ROWS[id(self.mesh_device)] = (self.mesh_device, t)
+            hit = _ZERO_ROWS[key] = (self.mesh_device, t)
         return ttnn.to_memory_config(hit[1], mem)
 
     def _bucket_mems(self, b):

@@ -108,5 +108,46 @@
       "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/optimized_decoder/logs/r2_fullctx_cand_hifi2.log"
     },
     "multi_bucket_traces_test": "tests/test_optimized_decoder.py::test_optimized_multi_bucket_traces"
+  },
+  "multichip_decoder": {
+    "target_mesh": "1x4 Blackhole p150b (P150_X4), FABRIC_1D_RING, TP=4",
+    "current_supported_context": 131072,
+    "capability_reduction": null,
+    "decode_batch": 32,
+    "kv_layout_per_chip": "K and V [65537 blocks, 2 local kv heads, 64, 64] BFP8 per attention layer (chip d = kv heads 2d, 2d+1)",
+    "measured_per_chip_gib": {
+      "dram_capacity": 31.738,
+      "conv_dense_layer_weights": 0.041,
+      "conv_moe_layer_weights": 0.311,
+      "attn_moe_layer_weights_incl_rope_tables": 0.371,
+      "kv_cache_per_attention_layer_32x131072": 1.063,
+      "decoder_stack_40_layers_32x131072": 23.12,
+      "stack_fraction_of_dram": 0.728
+    },
+    "headroom_note": "remaining ~8.6 GiB/chip for embedding / LM head (tied 128000 x 2048: <= 0.5 GiB bf16 replicated), activations, CCL scratch and the trace region (96 MiB in tests); re-verified with all 40 layers in the full-model stage",
+    "measurement": "tests/test_multichip_decoder.py::test_multichip_memory_capacity -> doc/multichip_decoder/sweeps/memory_capacity.json (ttnn.get_memory_view DRAM, one layer of each kind + one 32x131072 KV cache, extrapolated by layer counts 2/28/10)",
+    "largest_prefill_tested": 131069,
+    "largest_decode_position_tested": 131071,
+    "test": "models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_multichip_decoder.py::test_multichip_full_context (+ test_multichip_bucketed_full_context)",
+    "log": "models/autoports/liquidai_lfm2_5_24b_a2b/doc/multichip_decoder/logs/m2_full_suite.log",
+    "non_aligned_lengths_tested": [
+      1,
+      31,
+      33,
+      65,
+      77,
+      97,
+      300,
+      2047,
+      2049,
+      4100,
+      131069
+    ],
+    "persistent_allocation_changes": [
+      "per chip: 1/4 of every attention / conv / dense weight, 1/4 of every expert in the decode stacked copy (TP over I) and 16 whole experts in the prefill dispatch copy (EP): same bytes per chip for both expert copies",
+      "per chip KV cache: 2 of 8 kv heads (1/4 of the single-chip cache)",
+      "replicated: norms, router (+ DS decode router), RoPE tables, routing / dispatch constants",
+      "l1_small_size 24576 (CCL semaphores); decode all-reduce scratch allocated per call (no persistent L1)"
+    ]
   }
 }

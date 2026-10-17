@@ -65,7 +65,7 @@ ROUTER_TIE_TAU = 1e-3  # fp32 biased-score gap between the k-th and (k+1)-th exp
 
 
 @torch.no_grad()
-def near_tie_alternatives(layer, rope, x, positions, tau=ROUTER_TIE_TAU):
+def near_tie_alternatives(layer, rope, x, positions, tau=None):
     """For an MoE layer: references of ``x`` ``[S, H]`` with the k-th/(k+1)-th expert swapped at each
     position in ``positions`` whose biased router scores are within ``tau``.  A bf16 forward can
     legitimately pick either expert there (``torch.topk`` on fp32 is itself only one choice), so a
@@ -73,6 +73,7 @@ def near_tie_alternatives(layer, rope, x, positions, tau=ROUTER_TIE_TAU):
     ff = layer.feed_forward
     if not hasattr(ff, "gate"):
         return []
+    tau = ROUTER_TIE_TAU if tau is None else tau  # module value at call time (the multichip tests widen it)
     cap = {}
     hook = ff.register_forward_pre_hook(lambda m, a: cap.__setitem__("h", a[0].detach().reshape(-1, a[0].shape[-1])))
     hf_layer_forward(layer, rope, x.unsqueeze(0))

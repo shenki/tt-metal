@@ -1,0 +1,108 @@
+2026-10-17 10:47:56.698 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, github-actions-annotate-failures-0.3.0, anyio-4.15.1, dash-2.15.0, cov-7.0.0, split-0.11.0, repeat-0.9.4, benchmark-5.2.3
+timeout: 1000.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-10-17 10:47:57.778 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_multichip_decoder:_policy:35 - LFM2_POLICY_OVERRIDE={}
+collected 1 item
+
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_multichip_decoder.py::test_multichip_increasing_lengths_same_instance[blackhole-attn_moe-mesh_device0-device_params0] 2026-10-17 10:47:57.944 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-17 10:47:57.944 | info     |             UMD | Cluster constructor started. (cluster.cpp:409)
+2026-10-17 10:47:57.945 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-17 10:47:57.945 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-17 10:47:57.960 | info     |             UMD | Established firmware bundle version: 19.15.0 (topology_discovery.cpp:654)
+2026-10-17 10:47:57.961 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-17 10:47:58.029 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:176)
+2026-10-17 10:47:58.029 | info     |             UMD | IOMMU: enabled (cluster.cpp:150)
+2026-10-17 10:47:58.029 | info     |             UMD | KMD version: 2.11.0 (cluster.cpp:153)
+2026-10-17 10:47:58.029 | info     |             UMD | Cluster constructor completed. (cluster.cpp:880)
+2026-10-17 10:47:58.032 | info     |             UMD | Starting devices in cluster (cluster.cpp:1466)
+2026-10-17 10:47:58.307 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1475)
+2026-10-17 10:47:58.308 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-10-17 10:47:58.308 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-10-17 10:47:58.309 | info     |          Fabric | Loaded physical groupings from: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-17 10:47:58.310 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-17 10:47:58.310 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-10-17 10:47:58.310 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-10-17 10:47:58.310 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-10-17 10:47:58.310 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-10-17 10:47:58.311 | INFO     | conftest:mesh_device:638 - Keeping trace_region_size=100663296 from device_params (already set)
+2026-10-17 10:47:58.312 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:421)
+2026-10-17 10:47:58.312 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:531)
+2026-10-17 10:47:58.312 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:593)
+2026-10-17 10:47:58.312 | info     |          Fabric | Loaded physical groupings from: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-17 10:47:58.312 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-17 10:47:58.313 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1523)
+2026-10-17 10:47:58.313 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1617)
+2026-10-17 10:47:58.313 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1826)
+2026-10-17 10:47:58.313 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1943)
+2026-10-17 10:47:58.399 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-17 10:47:58.463 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-17 10:47:58.463 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+2026-10-17 10:47:59.159 | DEBUG    | conftest:mesh_device:668 - multidevice with 4 devices is created
+2026-10-17 10:47:59.161 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:305 - TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=None
+2026-10-17 10:48:18.392 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:397 - interleaved schedule: 27 decode replays of one trace, 6 fg requests
+2026-10-17 10:48:18.399 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 2 prompt 40 decode 27 (delay 0): prefill PCC 0.999917 decode PCC 0.999988 delta PCC 0.999062/0.999818 real=True
+2026-10-17 10:48:18.405 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 20 prompt 63 decode 27 (delay 0): prefill PCC 0.999840 decode PCC 0.999766 delta PCC 0.998002/0.996548 real=True
+2026-10-17 10:48:18.452 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 9 prompt 2047 decode 2 (delay 0): prefill PCC 0.999943 decode PCC 0.999986 delta PCC 0.998914/0.999878 real=True
+2026-10-17 10:48:18.503 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 9 prompt 2048 decode 2 (delay 1): prefill PCC 0.999934 decode PCC 0.999993 delta PCC 0.998752/0.999828 real=True
+2026-10-17 10:48:18.568 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 9 prompt 2049 decode 2 (delay 2): prefill PCC 0.999934 decode PCC 0.999994 delta PCC 0.998719/0.999776 real=True
+2026-10-17 10:48:18.700 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 9 prompt 4100 decode 2 (delay 0): prefill PCC 0.999929 decode PCC 0.999992 delta PCC 0.998579/0.999847 real=True
+2026-10-17 10:48:18.705 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 9 prompt 32 decode 2 (delay 1): prefill PCC 0.999984 decode PCC 0.999986 delta PCC 0.999836/0.999794 real=True
+2026-10-17 10:48:18.711 | INFO     | autoports.liquidai_lfm2_5_24b_a2b.tests.test_functional_decoder:run_interleaved:405 - interleaved layer 2 slot 9 prompt 33 decode 2 (delay 2): prefill PCC 0.999866 decode PCC 0.997899 delta PCC 0.998529/0.981865 real=True
+FAILED2026-10-17 10:48:18.917 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3}
+
+
+=================================== FAILURES ===================================
+_ test_multichip_increasing_lengths_same_instance[blackhole-attn_moe-mesh_device0-device_params0] _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices), kind = 'attn_moe'
+
+    @_mesh_test
+    @pytest.mark.parametrize("kind", list(LAYERS))
+    def test_multichip_increasing_lengths_same_instance(mesh_device, kind):
+        lens = [2047, 2048, 2049, 4100, 32, 33]
+        fg = [User(slot=9, prompt_len=n, decode_steps=2, seed=500 + n, join_delay=i % 3) for i, n in enumerate(lens)]
+>       _assert(run_interleaved(mesh_device, LAYERS[kind], fg, chunk_size=2048, decoder_factory=MC))
+
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_multichip_decoder.py:240:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [(User(slot=2, prompt_len=40, decode_steps=28, seed=70, x=tensor([[ 0.0240, -0.0021,  0.0126,  ..., -0.0110, -0.0435, ...  0.0242])], join_delay=0, delta=(0.9985785746836462, 0.999847255809026)), 0.9999289525601255, 0.999991881044701), ...]
+
+    def _assert(results):
+        for u, p, d in results:
+            assert p >= PCC_BAR, f"slot {u.slot} prefill PCC {p}"
+            assert d >= PCC_BAR, f"slot {u.slot} decode PCC {d}"
+            # Update-PCC bar applies to real weights only: with synthetic weights the HF reference itself
+            # run in bf16 scores 0.9196 on one batch32 conv_moe user (TT: 0.9199) because a near-tie flips
+            # that token's expert selection (doc/fused_decoder/work_log.md, synthetic-weight control).
+            dp, dd = getattr(u, "delta", (1.0, 1.0))
+            if _use_real():
+>               assert dp >= DELTA_PCC_BAR and dd >= DELTA_PCC_BAR, f"slot {u.slot} update (out - x) PCC {dp}/{dd}"
+E               AssertionError: slot 9 update (out - x) PCC 0.9985293143287982/0.9818648908206926
+E               assert (0.9985293143287982 >= 0.99 and 0.9818648908206926 >= 0.99)
+
+models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_functional_decoder.py:236: AssertionError
+- generated xml file: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+19.63s call     models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_multichip_decoder.py::test_multichip_increasing_lengths_same_instance[blackhole-attn_moe-mesh_device0-device_params0]
+1.37s setup    models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_multichip_decoder.py::test_multichip_increasing_lengths_same_instance[blackhole-attn_moe-mesh_device0-device_params0]
+0.02s teardown models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_multichip_decoder.py::test_multichip_increasing_lengths_same_instance[blackhole-attn_moe-mesh_device0-device_params0]
+=========================== short test summary info ============================
+FAILED models/autoports/liquidai_lfm2_5_24b_a2b/tests/test_multichip_decoder.py::test_multichip_increasing_lengths_same_instance[blackhole-attn_moe-mesh_device0-device_params0]
+============================== 1 failed in 21.17s ==============================
+2026-10-17 10:48:20.872 | info     |    BuildKernels | JIT cache stats: 721/721 hits (100.0%) [721 cached, 420 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-17 10:48:20.872 | info     |    BuildKernels | JIT telemetry: 33 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-17 10:48:20.912 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-17 10:48:20.912 | info     |             UMD | Closing devices in cluster (cluster.cpp:1480)
+2026-10-17 10:48:21.074 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1490)
+2026-10-17 10:48:21.074 | info     |             UMD | Cluster destructor started. (cluster.cpp:1211)
+2026-10-17 10:48:21.075 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1224)

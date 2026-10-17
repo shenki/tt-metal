@@ -1,0 +1,3 @@
+final active=4 bucket=4 policy_override={}
+generated/profiler/reports/2026_10_17_11_46_53/ops_perf_results_2026_10_17_11_46_53.csv
+f6d404a0 worktree 6b3a48967ba3

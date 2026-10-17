@@ -233,7 +233,7 @@ def _bucket_for(active):
     return decode_bucket([u.slot for u in active], MULTI_BUCKETS) or TILE
 
 
-def run_multi_bucket(mesh_device, layer_idx, chunk_size=128):
+def run_multi_bucket(mesh_device, layer_idx, chunk_size=128, factory=None):
     """One decoder, one trace per bucket in MULTI_BUCKETS sharing the persistent decode inputs, KV cache
     and ShortConv state.  Every bucket's decode and every prefill shape are compiled before the first
     capture; the schedule then alternates buckets as users join (prefill between replays) and leave,
@@ -290,7 +290,7 @@ def run_multi_bucket(mesh_device, layer_idx, chunk_size=128):
         u.ref_alts = near_tie_alternatives(hf_layer, hf_rope, u.x, range(u.prompt_len, u.prompt_len + u.decode_steps))
     del hf_layer
 
-    decoder, rope = make_decoder(OPT, sd, cfg, args, layer_idx, mesh_device, max_seq)
+    decoder, rope = make_decoder(factory or OPT, sd, cfg, args, layer_idx, mesh_device, max_seq)
     layout = PagedLayout(U + [scratch], max_seq)
     if decoder.is_attention:
         decoder.mixer.allocate_kv_cache(layout.num_blocks, layout.block_size)
@@ -298,7 +298,12 @@ def run_multi_bucket(mesh_device, layer_idx, chunk_size=128):
         tmp = User(slot=SCRATCH_SLOT, prompt_len=u.prompt_len, decode_steps=0, seed=0, x=u.x, blocks=scratch.blocks)
         run_prefill(decoder, rope, mesh_device, layout, tmp, chunk_size)
 
-    inp = DecodeInputs(mesh_device, H, layout.max_blocks_per_seq)
+    inp = DecodeInputs(
+        mesh_device,
+        H,
+        layout.max_blocks_per_seq,
+        slot_mask_width=getattr(decoder, "slot_mask_width", None),
+    )
     garbage = torch.Generator().manual_seed(7)
     active, step = [], {id(u): 0 for u in U}
 

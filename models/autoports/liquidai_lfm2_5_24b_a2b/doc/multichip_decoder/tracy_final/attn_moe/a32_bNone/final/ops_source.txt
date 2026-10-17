@@ -1,0 +1,3 @@
+final active=32 bucket=None policy_override={}
+generated/profiler/reports/2026_10_17_11_40_08/ops_perf_results_2026_10_17_11_40_08.csv
+f6d404a0 worktree 6b3a48967ba3

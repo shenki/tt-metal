@@ -1,0 +1,23 @@
+TRACY attn_moe   a32 bNone final                    prefill    3549.1 us [3496.6 3535.6 3532.1 3494.6]  decode    722.0 us [717.3 716.5 716.7 718.3]
+TRACY attn_moe   a1 bNone final                    prefill    3519.3 us [3488.2 3485.9 3490.6 3502.9]  decode    439.6 us [435.8 435.5 435.4 436.0]
+TRACY attn_moe   a1 b1    final                    prefill    3521.9 us [3488.4 3484.8 3488.1 3498.4]  decode    244.7 us [241.6 241.4 241.5 242.2]
+TRACY attn_moe   a4 b4    final                    prefill    3523.7 us [3494.0 3482.3 3491.9 3501.8]  decode    388.4 us [384.1 384.2 383.9 384.4]
+TRACY conv_moe   a32 bNone final                    prefill    3202.7 us [3167.5 3191.2 3176.1 3164.9]  decode    678.8 us [673.4 673.5 673.3 673.8]
+TRACY conv_moe   a1 bNone final                    prefill    3207.8 us [3174.7 3192.1 3183.8 3168.1]  decode    369.8 us [368.1 367.7 367.6 368.1]
+TRACY conv_moe   a1 b1    final                    prefill    3199.3 us [3165.8 3185.5 3173.8 3159.9]  decode    210.3 us [207.8 207.1 207.7 208.2]
+TRACY conv_moe   a4 b4    final                    prefill    3213.8 us [3170.0 3185.9 3180.8 3173.0]  decode    336.2 us [331.9 331.5 331.8 332.1]
+TRACY conv_dense a32 bNone final                    prefill    1408.8 us [1397.6 1403.7 1401.3 1394.1]  decode    153.2 us [150.4 150.1 150.4 150.7]
+TRACY conv_dense a1 bNone final                    prefill    1409.7 us [1395.9 1415.0 1403.4 1390.8]  decode    152.9 us [150.1 150.0 150.6 150.9]
+TRACY conv_dense a1 b1    final                    prefill    1407.3 us [1395.9 1406.9 1405.5 1391.4]  decode    152.6 us [150.3 149.8 150.3 151.0]
+WALL conv_dense a32 bNone prefill 5.142795998835936 ms decode 185.54133999714395 us
+WALL conv_moe a32 bNone prefill 8.49367900082143 ms decode 704.2023400208564 us
+WALL attn_moe a32 bNone prefill 7.6522799990925705 ms decode 750.0896800047485 us
+WALL conv_dense a1 bNone prefill 5.721397999877809 ms decode 185.0563600237365 us
+WALL conv_moe a1 bNone prefill 8.348180999746546 ms decode 397.88931997463806 us
+WALL attn_moe a1 bNone prefill 7.186396998804412 ms decode 467.73832000326365 us
+WALL conv_dense a1 b1 prefill 3.2364540002163267 ms decode 184.88555997464573 us
+WALL conv_moe a1 b1 prefill 7.403813997370889 ms decode 248.11887997202578 us
+WALL attn_moe a1 b1 prefill 7.510323001042707 ms decode 266.01861995004583 us
+WALL conv_dense a4 b4 prefill 2.84895899676485 ms decode 184.78375997801777 us
+WALL conv_moe a4 b4 prefill 9.35511699935887 ms decode 373.6854800081346 us
+WALL attn_moe a4 b4 prefill 6.774793000658974 ms decode 398.9287200238323 us
