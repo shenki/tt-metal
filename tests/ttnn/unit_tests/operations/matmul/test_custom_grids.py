@@ -255,6 +255,45 @@ class TestMcast2D:
         finally:
             _teardown(device, mgr)
 
+    @skip_for_slow_dispatch()
+    @pytest.mark.parametrize("transpose_mcast", [False, True])
+    def test_block_sharded_in0_on_offset_subdevice(self, device, transpose_mcast):
+        mgr, sd_id, cols, wrows, sy = _setup_subdevice(device)
+        try:
+            gx, gy = 4, 2
+            if cols < gx or wrows < gy:
+                pytest.skip("Need a 4x2 worker grid")
+            awc = _crs(gx, gy, start_y=sy)
+            m, k, n = 128, 512, 256
+            torch.manual_seed(42)
+            ta = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+            tb = torch.randn(k, n, dtype=torch.bfloat16)
+            orientation = ttnn.ShardOrientation.COL_MAJOR if transpose_mcast else ttnn.ShardOrientation.ROW_MAJOR
+            shard_shape = [m // (gx if transpose_mcast else gy), k // (gy if transpose_mcast else gx)]
+            in0_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(awc, shard_shape, orientation),
+            )
+            a = ttnn.from_torch(
+                ta, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=in0_memory_config
+            )
+            b = ttnn.from_torch(tb, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+            cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=m // (gx if transpose_mcast else gy) // 32,
+                per_core_N=n // (gy if transpose_mcast else gx) // 32,
+                transpose_mcast=transpose_mcast,
+                allowed_worker_cores=awc,
+            )
+            output = ttnn.matmul(a, b, program_config=cfg, sub_device_id=sd_id)
+            assert_with_pcc(ta @ tb, ttnn.to_torch(output), 0.999)
+        finally:
+            _teardown(device, mgr)
+
 
 # ---------------------------------------------------------------------------
 # 5) Validation / property tests

@@ -681,6 +681,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     num_out_block_w,
     transpose_mcast,
     bias_layout="broadcast",
+    per_core_n_override=None,
 ):
     if in0_sharded or out_sharded:
         fuse_batch = True
@@ -713,6 +714,8 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         in0_block_w = k // grid_size[0] // 32
         per_core_M = m // grid_size[1] // 32
         per_core_N = n // grid_size[0] // 32
+    if per_core_n_override is not None:
+        per_core_N = per_core_n_override
 
     out_block_h = per_core_M // num_out_block_h
     out_block_w = per_core_N // num_out_block_w
@@ -881,6 +884,26 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert mesh_device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("transpose_mcast", [False, True])
+def test_matmul_2d_sender_only_shards(device, transpose_mcast):
+    grid_size = (4, 8) if transpose_mcast else (8, 4)
+    run_matmul_2d_multiple_output_blocks_per_core(
+        device,
+        b=1,
+        m=256,
+        k=512,
+        n=256,
+        has_bias=False,
+        grid_size=grid_size,
+        in0_sharded=True,
+        out_sharded=False,
+        num_out_block_h=1,
+        num_out_block_w=1,
+        transpose_mcast=transpose_mcast,
+        per_core_n_override=2,
+    )
 
 
 def run_matmul_2d_tiny_tile(
