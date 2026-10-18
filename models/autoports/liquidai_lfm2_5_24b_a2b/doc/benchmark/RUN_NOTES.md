@@ -146,3 +146,6 @@ The collector is [tests/benchmark_roofline.py](../../tests/benchmark_roofline.py
   (`run/.gitignore`), where the checker reads them. To re-check from a clean checkout, decompress them in place first.
 - **Ownership.** The hook-owned servers were stopped after the run (chips released). The ownership state is in
   `tt-metal/generated/lfm2_benchmark/server.json`.
+
+## Commits
+Stage 11 committed locally as `28f304f2` (not pushed).
