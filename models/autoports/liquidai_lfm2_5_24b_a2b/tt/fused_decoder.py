@@ -383,6 +383,13 @@ class FusedShortConv(ShortConv):
             ttnn.deallocate(new_state)
         if tail_src is not ext:
             ttnn.deallocate(tail_src)
+        if inputs.tap_sel_0 is not None and getattr(self, "tap_buf", None) is not None:
+            # serving prefix caching: the state at each inner snapshot boundary of this chunk (rows of ext selected
+            # exactly like the tail rows above) into this layer's persistent tap buffers, row r = boundary r
+            for j, sel in enumerate((inputs.tap_sel_0, inputs.tap_sel_1)):
+                rows = ttnn.matmul(sel, ext, compute_kernel_config=self.ckc)
+                ttnn.copy(rows, self.tap_buf[j])
+                ttnn.deallocate(rows)
         ttnn.deallocate(ext)
         y = ttnn.multiply(c, conv)
         ttnn.deallocate(c)

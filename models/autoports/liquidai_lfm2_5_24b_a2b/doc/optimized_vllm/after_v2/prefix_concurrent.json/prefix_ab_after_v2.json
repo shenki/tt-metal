@@ -1,0 +1,50 @@
+{
+ "label": "after_v2",
+ "system_words": 6000,
+ "requests": [
+  {
+   "question": "Summarize in two sentences what the datatype sweep selected and why.",
+   "ttft_s": 1.0156072819954716,
+   "total_s": 3.3147229080059333,
+   "text": "We need to summarize in two sentences what the datatype sweep selected and why. The context is a long document about LFM2.5-24B-A2B datatype sweep (stage 8) \u2014 1x4 Blackhole p150b, TP=4. The selected config is C1: decode all-reduce payload BFP8, with everything else as stage-7 `selected_precision_config.json` (config_id C1). The sweep selected C1 as the fastest config that passes the accuracy gate and selection rule v2 (b) and (c). C1 is 1.08% slower than W_e in speed but sits at the top of the accuracy axis (99% top-1), and it is the fastest config that passes (",
+   "usage": {
+    "prompt_tokens": 12062,
+    "total_tokens": 12222,
+    "completion_tokens": 160
+   }
+  },
+  {
+   "question": "What is the decode throughput reported for the optimized full model?",
+   "ttft_s": 0.6197457359958207,
+   "total_s": 1.2922102470038226,
+   "text": "We need to answer: \"What is the decode throughput reported for the optimized full model?\" The user is asking about the decode throughput for the optimized full model. The context includes a lot of information about the LFM2.5-24",
+   "usage": {
+    "prompt_tokens": 12058,
+    "total_tokens": 12106,
+    "completion_tokens": 48
+   }
+  },
+  {
+   "question": "List three limitations mentioned in the reference material.",
+   "ttft_s": 0.6376890660030767,
+   "total_s": 1.2892234239989193,
+   "text": "We need to list three limitations mentioned in the reference material. The reference material is the long text about LFM2.5-24B-A2B datatype sweep and the stage-6 full model. The user asks: \"",
+   "usage": {
+    "prompt_tokens": 12055,
+    "total_tokens": 12103,
+    "completion_tokens": 48
+   }
+  },
+  {
+   "question": "Which precision does the KV cache use?",
+   "ttft_s": 0.6362145989987766,
+   "total_s": 1.2879963140003383,
+   "text": "We need to answer: \"Which precision does the KV cache use?\" The user is asking about the KV cache precision in the context of the LFM2.5-24B-A2B model sweep. The provided context includes",
+   "usage": {
+    "prompt_tokens": 12055,
+    "total_tokens": 12103,
+    "completion_tokens": 48
+   }
+  }
+ ]
+}

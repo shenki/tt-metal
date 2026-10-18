@@ -180,6 +180,9 @@ class ConvPrefillInputs:
     tail_window:     ``None``, or ``(start, end)`` extended rows when built with ``windowed=True``:
                      ``tail_sel_*`` then index only that tile-aligned window (<= 64 rows) holding
                      the last two logical rows (consumers that support it slice ``ext`` first).
+    tap_sel_{0,1}:   optional ``[1, 1, 32, 32 + S_pad]`` -- row ``r`` is one-hot at extended row
+                     ``32 + b_r - 2`` (resp. ``- 1``) for each inner snapshot boundary ``b_r`` of the
+                     chunk (serving prefix caching; consumers with tap buffers persist those rows).
     """
 
     carry_sel_0: ttnn.Tensor
@@ -188,6 +191,8 @@ class ConvPrefillInputs:
     tail_sel_1: ttnn.Tensor
     keep_mask: ttnn.Tensor
     tail_window: tuple = None
+    tap_sel_0: ttnn.Tensor = None
+    tap_sel_1: ttnn.Tensor = None
 
     @staticmethod
     def tail_window_for(valid_len, padded_len):

@@ -41,12 +41,15 @@ import ttnn
 from models.autoports.liquidai_lfm2_5_24b_a2b.tt.functional_decoder import DRAM, TILE
 from models.autoports.liquidai_lfm2_5_24b_a2b.tt.model import (
     BLOCK_SIZE,
+    CHUNK_ALIGN,
     PREFILL_BUCKETS,
     PREFILL_CHUNK,
     SHARED_GENERATORS,
     Lfm2Model,
     blocks_for,
     host_tensor,
+    prefill_bucket,
+    tap_boundaries,
 )
 from models.autoports.liquidai_lfm2_5_24b_a2b.tt.optimized_decoder import (
     DECODE_BUCKETS,
@@ -55,6 +58,7 @@ from models.autoports.liquidai_lfm2_5_24b_a2b.tt.optimized_decoder import (
 )
 
 HISTORY_ROWS = 512  # device token-history rows (deferred readback window; read and rewound when full)
+NEUTRAL_PENALTIES = (0.0, 0.0, 1.0)  # presence, frequency, repetition: exact no-ops in apply_penalties
 
 
 def configure_fabric(payload_bytes=8192):
@@ -103,12 +107,17 @@ class Lfm2Generator(Generator):
         if sampling_strategy not in ("split", "argmax"):
             raise ValueError(f"unknown sampling strategy {sampling_strategy!r}")
         self.sampling_strategy = sampling_strategy
+        # device top-k cap: ttnn.sampling keeps the best 32 candidates (kernels/compute/sampling.cpp nearest32_K = 32), so
+        # a wider TTSampling candidate row (max_top_k=64) still samples from the top 32 (doc/optimized_vllm/README.md)
+        self.max_top_k = int(os.environ.get("LFM2_MAX_DEVICE_TOP_K", "32"))
+        if self.max_top_k not in (32, 64):
+            raise ValueError(f"LFM2_MAX_DEVICE_TOP_K must be 32 or 64, got {self.max_top_k}")
         args = SimpleNamespace(
             vocab_size=model.vocab,
             padded_vocab_size=model.padded_vocab,
             cluster_shape=(1, model.tp),
             max_batch_size=self.B,
-            max_top_k=32,
+            max_top_k=self.max_top_k,
             pad_logits_to_power_of_2=pad_logits_to_power_of_2,
             model_config={
                 "SAMPLING_AG_CONFIG": dict(
@@ -130,6 +139,20 @@ class Lfm2Generator(Generator):
         # the greedy tie-break pass is kept, so greedy exactness does not depend on it
         self.sampler._topk_stable = os.environ.get("LFM2_STABLE_TOPK", "1") == "1"
         self._push_sampling_params()
+        # device penalties (presence / frequency / repetition; models/common/sampling/tt_penalties.py): persistent
+        # vocab-sharded prompt masks and output counts, applied to the logits and updated with the sampled token inside
+        # the penalized sampling traces; histories are rebuilt from host token lists at request boundaries only
+        self.penalties = None
+        if os.environ.get("LFM2_DEVICE_PENALTIES", "1") == "1":
+            from models.common.sampling.tt_penalties import TTPenalties
+
+            self.penalties = TTPenalties(self.mesh, args)
+        self.pen_host = torch.tensor(NEUTRAL_PENALTIES).repeat(self.B, 1)  # per slot (presence, frequency, repetition)
+        # host mirror of the prompt masks (row updates without re-deriving every row)
+        self.pen_prompt_host = torch.zeros(self.B, model.padded_vocab, dtype=torch.int32) if self.penalties else None
+        # output counts no longer follow the token history (a prefill's first token, a host-sampled step, a slot move):
+        # set until the next full history rebuild; a penalized replay while set is counted (must stay 0)
+        self.pen_stale = False
         rm = ttnn.ROW_MAJOR_LAYOUT
         mk = lambda t_, dt, lay, mapper: ttnn.from_torch(
             t_, dtype=dt, layout=lay, device=self.mesh, memory_config=DRAM, mesh_mapper=mapper
@@ -149,6 +172,9 @@ class Lfm2Generator(Generator):
         self.history_count = 0
         self._history_out = []  # host rows of earlier (full) windows
         self.seed0 = ttnn.to_torch(ttnn.get_device_tensors(self.sampler.seeds_tt_tensor)[0]).to(torch.int64)
+        # host mirror of the device RNG seeds (uint32 per row): every sampler replay plus_one's all rows, so request
+        # boundaries rewrite seeds without reading the device back
+        self.seed_host = self.seed0.reshape(-1).clone()
         # cache / request state (host mirrors of the device inputs)
         self.kv = None
         self.owns_cache = False
@@ -162,6 +188,8 @@ class Lfm2Generator(Generator):
         self.append_trace = None
         self.prefill_traces = {}  # (bucket, continuation, out) -> trace id
         self.sample_hist_traces = {}  # bucket -> sampling + history-append trace id
+        self.pen_traces = {}  # bucket -> penalized sampling trace id (apply, sample, count)
+        self.pf_sample_pen_trace = None  # penalized prefill sampler (apply, sample; counts rebuilt on the next reset)
         self.traced_prefill = os.environ.get("LFM2_EAGER_PREFILL") != "1"
         self.snapshot_entries = 0  # ShortConv snapshot pool size (serving: set before prepare)
 
@@ -184,8 +212,8 @@ class Lfm2Generator(Generator):
         if greedy:
             k, p, t = self._greedy
         else:
-            if not 1 <= top_k <= 32 or temperature <= 0:
-                raise ValueError("device sampling supports top_k 1..32 and temperature > 0")
+            if not 1 <= top_k <= self.max_top_k or temperature <= 0:
+                raise ValueError(f"device sampling supports top_k 1..{self.max_top_k} and temperature > 0")
             k, p, t = top_k, top_p, temperature
         changed = False
         for r in rows:
@@ -196,17 +224,103 @@ class Lfm2Generator(Generator):
         if seed is not None:
             self.set_row_seeds(rows, [seed + r for r in rows])
 
+    # ------------------------------------------------------------------------------------------
+    # device penalties
+    # ------------------------------------------------------------------------------------------
+    def set_penalty_params(self, slots, presence=0.0, frequency=0.0, repetition=1.0):
+        """Per-slot penalty parameters (device copy only when a value changed)."""
+        vals = torch.tensor([float(presence), float(frequency), float(repetition)])
+        if tuple(vals.tolist()) != NEUTRAL_PENALTIES and self.penalties is None:
+            raise ValueError("device penalties are disabled (LFM2_DEVICE_PENALTIES=0)")
+        if repetition <= 0:
+            raise ValueError(f"repetition penalty must be > 0, got {repetition}")
+        slots = [int(s) for s in slots]
+        if all(torch.equal(self.pen_host[s], vals) for s in slots):
+            return
+        self.pen_host[slots] = vals
+        self.penalties.reset_params(*(self.pen_host[:, i].tolist() for i in range(3)))
+        self.counters["penalty_param_refreshes"] += 1
+
+    def penalized(self, slots):
+        """Whether any of ``slots`` has non-neutral penalties (selects the penalized sampling traces)."""
+        slots = [int(s) for s in slots]
+        return bool(slots) and bool((self.pen_host[slots] != torch.tensor(NEUTRAL_PENALTIES)).any())
+
+    def _counts_host(self, tokens):
+        """[rows, L] token lists (-1 padded) -> [32, padded vocab] int32 histogram (row r = slot r)."""
+        t = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1, torch.as_tensor(tokens).shape[-1])[: self.B]
+        valid = (t >= 0) & (t < self.model.vocab)
+        counts = torch.zeros(self.B, self.model.padded_vocab, dtype=torch.int32)
+        counts[: t.shape[0]].scatter_add_(1, torch.where(valid, t, 0), valid.to(torch.int32))
+        return counts
+
+    def _upload_int(self, full, dst, sharded):
+        """Host [32, padded vocab] int32 -> persistent penalty buffer ``dst`` (tile; vocab-sharded or replicated).  The
+        per-chip tile shards are built directly (``from_host_shards``): 4-8x cheaper than ``from_torch`` with a mesh
+        mapper (tests/bench_penalty_resets.py)."""
+        n = self.model.tp
+        if sharded:
+            shards = [
+                ttnn.from_torch(p.contiguous(), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT) for p in full.chunk(n, 1)
+            ]
+        else:
+            shards = [ttnn.from_torch(full, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)] * n
+        ttnn.copy_host_to_device_tensor(ttnn.from_host_shards(shards, self.mesh.shape), dst)
+
+    def set_penalty_prompts(self, slots, prompts):
+        """Request start: prompt masks of ``slots`` from their prompt token lists, output counts zeroed (other rows
+        keep their state)."""
+        slots = [int(s) for s in slots]
+        for s, p in zip(slots, prompts):
+            row = torch.as_tensor(p, dtype=torch.int64).reshape(-1)
+            row = row[(row >= 0) & (row < self.model.vocab)]
+            self.pen_prompt_host[s] = 0
+            self.pen_prompt_host[s, row] = 1
+        self._upload_int(self.pen_prompt_host, self.penalties.prompt_mask, sharded=True)
+        self.penalties.reset_output_tokens(slots=slots)
+        self.counters["penalty_prompt_resets"] += 1
+
+    def reset_penalty_state(self, prompt_tokens, output_tokens):
+        """Full rebuild of every row's prompt mask and output counts from host token lists ``[<=32, L]`` (row = slot,
+        -1 padded): the authoritative reset at decode transitions (host histograms: a device scatter_add would race on
+        repeated ids)."""
+        pen = self.penalties
+        prompt_mask = (self._counts_host(prompt_tokens) > 0).to(torch.int32)
+        if not torch.equal(prompt_mask, self.pen_prompt_host):  # unchanged across most admissions: skip the upload
+            self.pen_prompt_host = prompt_mask
+            self._upload_int(prompt_mask, pen.prompt_mask, sharded=True)
+            self.counters["penalty_prompt_uploads"] += 1
+        counts = self._counts_host(output_tokens)
+        self._upload_int(counts, pen.output_counts, sharded=True)
+        self._upload_int(counts, pen.output_counts_gathered, sharded=False)
+        self._upload_int((counts > 0).to(torch.int32), pen.output_mask, sharded=True)
+        self.pen_stale = False
+        self.counters["penalty_state_resets"] += 1
+
+    def _count_tokens(self):
+        """Count the just-sampled tokens of every row into the output counts (inside the penalized sampling traces).
+        ``update_output_tokens`` consumes (deallocates) its input, so it gets a copy of the persistent token buffer."""
+        self.penalties.update_output_tokens(ttnn.clone(self.model.state.tokens))
+
     def _read_seeds(self):
         self.counters["seed_readbacks"] += 1
         return ttnn.to_torch(ttnn.get_device_tensors(self.sampler.seeds_tt_tensor)[0]).to(torch.int64).reshape(-1)
 
+    def _advance_seeds(self):
+        """Mirror of the ``plus_one(seeds)`` at the end of every sampler replay."""
+        self.seed_host = (self.seed_host + 1) & 0xFFFFFFFF
+
+    def _write_seeds(self, s):
+        self._copy(s.to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+        self.seed_host = s.clone()
+
     def set_row_seeds(self, rows, values):
         """Device RNG seeds of ``rows`` (uint32; the sampler re-seeds from them before every draw and ``plus_one``s them
-        after it).  Other rows keep their device-advanced state (read-modify-write unless every row is given)."""
+        after it).  Other rows keep their device-advanced state (from the host mirror: no readback)."""
         rows = [int(r) for r in rows]
-        s = torch.zeros(self.B, dtype=torch.int64) if len(set(rows)) == self.B else self._read_seeds()
+        s = self.seed_host.clone()
         s[rows] = torch.as_tensor(values, dtype=torch.int64) & 0x7FFFFFFF  # 31 bits: exact through the int32 host copy
-        self._copy(s.to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+        self._write_seeds(s)
 
     def permute_slots(self, remap, *, resident_inputs=True, seeds=True):
         """Slot ``i`` takes the state of old slot ``remap[i]`` (absolute permutation of all 32 slots, applied once):
@@ -221,8 +335,14 @@ class Lfm2Generator(Generator):
             self.model.permute_conv_slots(remap)
         self.k_host, self.p_host, self.t_host = self.k_host[remap], self.p_host[remap], self.t_host[remap]
         self._push_sampling_params()
+        if self.penalties is not None:
+            # parameters follow the rows; masks / counts are rebuilt by the reset that accompanies a remap on
+            # device-sampled steps (plugin: layout change = transition)
+            self.pen_host = self.pen_host[remap]
+            self.penalties.reset_params(*(self.pen_host[:, i].tolist() for i in range(3)))
+            self.pen_stale = True
         if seeds:
-            self._copy(self._read_seeds()[remap].to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+            self._write_seeds(self.seed_host[remap])
         if resident_inputs:
             self._write_tokens(self._read_tokens()[remap])
             if self.page_host is not None:
@@ -261,6 +381,14 @@ class Lfm2Generator(Generator):
             self._copy(a, st.slot_active, "mask_refreshes")
             self._copy(a.expand(1, 1, self.B, st.slot_mask.shape[-1]), st.slot_mask, "mask_refreshes")
             self.active_host = active
+
+    def _logits_to_host(self, logits, rows=None):
+        """Vocab-sharded logits (device or host mesh tensor) -> torch fp32 ``[..., rows, 128000]``.  Per-device
+        ``to_torch`` + ``torch.cat``: bit-identical to ``ConcatMeshToTensor`` and 13x faster on the [32, 4 x 32256] tile
+        logits (6.6 vs 83.9 ms, tests/bench_logits_readback.py)."""
+        h = logits.cpu(blocking=True) if ttnn.has_storage_type_of(logits, ttnn.StorageType.DEVICE) else logits
+        t = torch.cat([ttnn.to_torch(d) for d in ttnn.get_device_tensors(h)], dim=-1)[..., : self.model.vocab].float()
+        return t if rows is None else t[..., :rows, :]
 
     def _read_tokens(self, t=None):
         self.counters["token_readbacks"] += 1
@@ -318,6 +446,8 @@ class Lfm2Generator(Generator):
         assert self.kv is not None, "allocate or bind the cache first"
         m, st = self.model, self.model.state
         t0 = time.perf_counter()
+        if self.snapshot_entries and m.conv_layers:
+            m.alloc_conv_taps()  # tap buffers + tap inputs of the large buckets: before the inputs and any capture
         m.alloc_prefill_inputs()  # persistent per-bucket prefill inputs: before any capture
         if self.snapshot_entries and m.conv_layers:
             m.alloc_conv_snapshot_pool(self.snapshot_entries)  # lives across replays: before any capture
@@ -341,11 +471,25 @@ class Lfm2Generator(Generator):
             ttnn.deallocate(lg)
         ttnn.fill(self.pf_logits, 0.0, output_tensor=self.pf_logits)
         self._sample(self.pf_logits, self.pf_tokens)
+        if self.penalties is not None:
+            self._sample_penalized(self.pf_logits, self.pf_tokens)
         for b in DECODE_BUCKETS:
             bucket = None if b >= TILE else b
             lg = m.decode_forward_device(bucket)
             self._sample(lg, st.tokens)
+            if self.penalties is not None:
+                self._sample_penalized(lg, st.tokens)
+                self._count_tokens()
             ttnn.deallocate(lg)
+        if self.penalties is not None:
+            # request-boundary penalty ops (row reset, row restore, full reset), then a clean state
+            pen = self.penalties
+            pen.reset_output_tokens(slots=[scratch_slot])
+            pen.reset_output_tokens(torch.zeros(self.B, 1, dtype=torch.int32), slots=[scratch_slot])
+            pen.reset_output_tokens(torch.full((self.B, 1), -1, dtype=torch.int32))
+            pen.reset_output_tokens()
+            pen.reset_prompt_tokens(torch.full((self.B, 1), -1, dtype=torch.int32))
+            pen.reset_params(*(self.pen_host[:, i].tolist() for i in range(3)))
         self._append_history()
         # request-boundary ops that may run between replays (reset() zeroes the whole KV cache / ShortConv state: the
         # cache is zeroed here once, the ShortConv state is restored from the backup below)
@@ -361,6 +505,8 @@ class Lfm2Generator(Generator):
             if getattr(m, "snap_pool", None) is not None:
                 m.snapshot_conv_state_into(scratch_slot, 0)
                 m.restore_conv_state_from(scratch_slot, 0)
+                if getattr(m, "conv_taps", False):
+                    m.snapshot_taps_into(0, 0)
         for s, b in zip(m.conv_states(), conv_backup):
             ttnn.copy(b, s)
             ttnn.deallocate(b)
@@ -376,6 +522,44 @@ class Lfm2Generator(Generator):
     def _sample(self, logits, out_tok):
         self.sampler(logits, tt_out_tok=out_tok)
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
+
+    def _apply_penalties(self, logits):
+        """Penalized copy of ``logits`` in vLLM's order (``vllm/model_executor/layers/utils.py::apply_penalties``):
+        repetition scaling first, on the sign of the raw logit, for tokens in the prompt or the output (positive logits
+        divided by the penalty, others multiplied), then ``- frequency * counts`` and ``- presence * output_mask``.
+        ``models/common/sampling/tt_penalties.py::apply_penalties`` subtracts presence / frequency first and tests the
+        sign afterwards, which differs from vLLM by up to (f * count + p)(1 - 1 / r) for repeated tokens; the buffers
+        and their bookkeeping are TTPenalties'."""
+        pen, bf16 = self.penalties, ttnn.bfloat16
+        shape = logits.shape
+        x = ttnn.reshape(logits, (-1, shape[-1]))
+        both = ttnn.add(pen.prompt_mask, pen.output_mask)
+        seen = ttnn.typecast(both, bf16)
+        ttnn.deallocate(both)
+        rep = ttnn.where(seen, pen.repetition_penalties, 1.0)
+        inv = ttnn.where(seen, pen.inverse_repetition_penalties, 1.0)
+        ttnn.deallocate(seen)
+        positive = ttnn.gt(x, 0)
+        scale = ttnn.where(positive, inv, rep)
+        for t in (positive, rep, inv):
+            ttnn.deallocate(t)
+        y = ttnn.multiply(x, scale)
+        ttnn.deallocate(scale)
+        for mask, coef in ((pen.output_counts, pen.frequency_penalties), (pen.output_mask, pen.presence_penalties)):
+            m = ttnn.typecast(mask, bf16)
+            term = ttnn.multiply(m, coef)
+            ttnn.deallocate(m)
+            term16 = ttnn.typecast(term, bf16)
+            ttnn.deallocate(term)
+            y = ttnn.subtract(y, term16, output_tensor=y)
+            ttnn.deallocate(term16)
+        return ttnn.reshape(y, shape)
+
+    def _sample_penalized(self, logits, out_tok):
+        """Penalties (``_apply_penalties``, a new tensor), then the sampler."""
+        pl = self._apply_penalties(logits)
+        self._sample(pl, out_tok)
+        ttnn.deallocate(pl)
 
     def _append_history(self):
         updated = ttnn.indexed_fill(self.history_cursor, self.history, self.model.state.tokens, dim=0)
@@ -407,6 +591,15 @@ class Lfm2Generator(Generator):
             self.traces[bucket] = (tid, logits, sid)
             self.sample_hist_traces[bucket] = sid_h
             self.counters["trace_captures"] += 3
+            if self.penalties is not None:
+                # penalized variant: penalties applied in place to logits[bucket] (consumed only by this replay), then
+                # the sampler, then the sampled tokens counted
+                pid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                self._sample_penalized(logits, self.model.state.tokens)
+                self._count_tokens()
+                ttnn.end_trace_capture(self.mesh, pid, cq_id=0)
+                self.pen_traces[bucket] = pid
+                self.counters["trace_captures"] += 1
             if self.pf_sample_trace is None:
                 self.pf_sample_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                 self._sample(self.pf_logits, self.pf_tokens)
@@ -415,6 +608,11 @@ class Lfm2Generator(Generator):
                 self._append_history()
                 ttnn.end_trace_capture(self.mesh, self.append_trace, cq_id=0)
                 self.counters["trace_captures"] += 2
+                if self.penalties is not None:
+                    self.pf_sample_pen_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                    self._sample_penalized(self.pf_logits, self.pf_tokens)
+                    ttnn.end_trace_capture(self.mesh, self.pf_sample_pen_trace, cq_id=0)
+                    self.counters["trace_captures"] += 1
         self.last_perf.setdefault("capture_s", {})[str(bucket)] = time.perf_counter() - t0
 
     def _trace(self, bucket):
@@ -444,12 +642,14 @@ class Lfm2Generator(Generator):
 
         ``tokens`` [B, L_pad] (logical lengths ``prompt_lens``), ``page_table`` [B, max_blocks] (row b = sequence b),
         ``slots`` the ShortConv state rows (default 0..B-1), ``start_pos`` [B] absolute start of these tokens (default 0;
-        a continuation must start at a multiple of 2048 and its slot must hold the state of the preceding tokens).
+        a continuation must start at a multiple of CHUNK_ALIGN and its slot must hold the state of the preceding tokens).
         Returns torch fp32 logits [B, L, 128000] (``return_all_logits``), else the first sampled token per sequence
         [B] (device sampling, ``sample=True``), else last-position logits [B, 1, 128000] (compat).  ``host_logits``:
         last-position logits [B, 1, 128000] from the traced path (the sampled-mode chunks accumulate into the persistent
-        prefill-logits buffer; one 8 MB readback instead of the sampler replay).  ``on_chunk(b, end)`` runs after each
-        chunk of sequence ``b`` (``end`` = absolute end position; serving snapshots ShortConv state there)."""
+        prefill-logits buffer; one 8 MB readback instead of the sampler replay).  ``on_chunk(b, end, taps)`` runs after
+        each chunk of sequence ``b`` (``end`` = absolute end position; ``taps`` = ``[(r, absolute boundary)]``, the inner
+        CHUNK_ALIGN boundaries whose ShortConv state the chunk left in tap row r when the model taps; serving snapshots
+        the state there)."""
         if kv_cache is not None and kv_cache is not self.kv:
             raise ValueError("kv_cache is not the bound cache (bind_cache first)")
         if not self.prepared:
@@ -471,8 +671,8 @@ class Lfm2Generator(Generator):
             ids = tokens[b, :n]
             row = page_table[b]
             pos, outs = starts[b], []
-            if pos % PREFILL_CHUNK:
-                raise ValueError(f"prefill start {pos} must be a multiple of {PREFILL_CHUNK}")
+            if pos % CHUNK_ALIGN:
+                raise ValueError(f"prefill start {pos} must be a multiple of {CHUNK_ALIGN}")
             if pos + n > self.model.max_seq_len:
                 raise ValueError(f"prompt end {pos + n} exceeds max_seq_len {self.model.max_seq_len}")
             done = 0
@@ -482,16 +682,19 @@ class Lfm2Generator(Generator):
                 mode = "all" if return_all_logits else ("last" if final else "none")
                 lg = self._prefill_chunk(ids[done : done + c], pos + done, c, slots[b], row, mode, sample)
                 if mode == "all":
-                    outs.append(self.model.logits_to_host(lg)[0, 0, :c])
+                    outs.append(self._logits_to_host(lg)[0, 0, :c])
                     self.counters["full_logits_readbacks"] += 1
                     ttnn.deallocate(lg)
                 elif mode == "last" and not sample:
-                    last.append(self.model.logits_to_host(lg)[0, 0, slots[b]].reshape(1, -1))
+                    last.append(self._logits_to_host(lg)[0, 0, slots[b]].reshape(1, -1))
                     self.counters["full_logits_readbacks"] += 1
                     ttnn.deallocate(lg)
+                taps = []
+                if getattr(self.model, "conv_taps", False):
+                    taps = [(r, pos + done + t) for r, t in tap_boundaries(c, prefill_bucket(c))]
                 done += c
                 if on_chunk is not None:
-                    on_chunk(b, pos + done)
+                    on_chunk(b, pos + done, taps)
             self.counters["prefill_chunks"] += (n + PREFILL_CHUNK - 1) // PREFILL_CHUNK
             if return_all_logits:
                 all_logits.append(torch.cat(outs, dim=0))
@@ -505,10 +708,18 @@ class Lfm2Generator(Generator):
             return torch.stack(last)
         if host_logits:
             self.counters["full_logits_readbacks"] += 1
-            return self.model.logits_to_host(self.pf_logits)[0, 0][slots].unsqueeze(1)
+            return self._logits_to_host(self.pf_logits)[0, 0][slots].unsqueeze(1)
         if self.pf_sample_trace is None:
             self._capture(decode_bucket(slots))
-        ttnn.execute_trace(self.mesh, self.pf_sample_trace, cq_id=0, blocking=False)
+        if self.penalized(slots):
+            # the rows' prompt masks were set by set_penalty_prompts; the first token is counted by the history rebuild
+            # of the next decode transition
+            ttnn.execute_trace(self.mesh, self.pf_sample_pen_trace, cq_id=0, blocking=False)
+            self.counters["prefill_penalized_sampling_replays"] += 1
+            self.pen_stale = True
+        else:
+            ttnn.execute_trace(self.mesh, self.pf_sample_trace, cq_id=0, blocking=False)
+        self._advance_seeds()
         self.counters["prefill_sampling_replays"] += 1
         toks = self._read_tokens(self.pf_tokens)
         return toks[slots]
@@ -588,6 +799,7 @@ class Lfm2Generator(Generator):
         active_slots=None,
         record_history=False,
         return_logits=False,
+        penalties=None,
         **kwargs,
     ):
         """One decode step for all 32 fixed slots.
@@ -599,7 +811,8 @@ class Lfm2Generator(Generator):
         ``read_from_device``) or None; ``host_sampling`` (compat): host argmax of the full logits, returns [32] tokens.
         ``return_logits`` (serving host-sampling steps): replay the model trace only (no sampler replay, the device RNG
         does not advance) and return its vocab-sharded logits (device tensor; host [32, 128000] with
-        ``read_from_device``); the caller writes the next token / positions from the host.
+        ``read_from_device``); the caller writes the next token / positions from the host.  ``penalties`` (default: any
+        active slot has non-neutral penalties) replays the penalized sampling trace.
         """
         if kv_cache is not None and kv_cache is not self.kv:
             raise ValueError("kv_cache is not the bound cache (bind_cache first)")
@@ -633,9 +846,13 @@ class Lfm2Generator(Generator):
             raise ValueError("cache capacity exhausted for an active slot")
         bucket = decode_bucket(active) if active_slots is None else (None if active_slots >= TILE else active_slots)
         validate_decode_bucket(self.pos_host, bucket)
+        pen = self.penalized(active) if penalties is None else bool(penalties)
+        if pen and (self.penalties is None or compat or record_history or not enable_trace):
+            raise ValueError("device penalties need the traced split-sampling decode (no history / host-sampling mode)")
         if not enable_trace:  # debug only
             lg = self.model.decode_forward_device(bucket)
             self._sample(lg, self.model.state.tokens)
+            self._advance_seeds()
             ttnn.deallocate(lg)
             self.counters["eager_decode_steps"] += 1
         else:
@@ -645,12 +862,13 @@ class Lfm2Generator(Generator):
             if return_logits:
                 self.pos_host[active] += 1
                 self.counters["logits_out_steps"] += 1
+                self.pen_stale = True  # the host samples this step: its token is not counted on device
                 if read_from_device:
                     self.counters["full_logits_readbacks"] += 1
-                    return self.model.logits_to_host(logits)[0, 0]
+                    return self._logits_to_host(logits)[0, 0]
                 return logits
             if compat:
-                full = self.model.logits_to_host(logits)[0, 0]
+                full = self._logits_to_host(logits)[0, 0]
                 self.counters["full_logits_readbacks"] += 1
                 pred = full.argmax(-1)
                 self._write_tokens(pred)
@@ -659,10 +877,21 @@ class Lfm2Generator(Generator):
                     self._flush_history()
                 ttnn.execute_trace(self.mesh, self.sample_hist_traces[bucket], cq_id=0, blocking=False)
                 self.history_count += 1
+                self._advance_seeds()
                 self.counters["sampling_replays"] += 1
                 self.counters["history_appends"] += 1
+            elif pen:
+                if self.pen_stale:
+                    self.counters["penalty_stale_replays"] += 1
+                    if self.counters["penalty_stale_replays"] == 1:
+                        logger.warning("penalized decode without a history rebuild since the last prefill / slot move")
+                ttnn.execute_trace(self.mesh, self.pen_traces[bucket], cq_id=0, blocking=False)
+                self._advance_seeds()
+                self.counters["sampling_replays"] += 1
+                self.counters["penalized_sampling_replays"] += 1
             else:
                 ttnn.execute_trace(self.mesh, sid, cq_id=0, blocking=False)
+                self._advance_seeds()
                 self.counters["sampling_replays"] += 1
             if record_history and compat:
                 self._record()
@@ -831,7 +1060,8 @@ class Lfm2Generator(Generator):
         self.history_count = 0
         self._copy(torch.zeros(1, dtype=torch.int32), self.history_cursor, "history_cursor_refreshes")
         self.set_sampling_params(top_k=1)
-        self._copy(self.seed0.to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+        self.set_penalty_params(range(self.B))
+        self._write_seeds(self.seed0.reshape(-1))
         self.counters["resets"] += 1
 
     def reset_slots(self, slots):
@@ -840,6 +1070,8 @@ class Lfm2Generator(Generator):
         pos[list(slots)] = -1
         self._refresh_positions(pos)
         self.model.reset_conv_slots(slots)
+        if self.penalties is not None:
+            self.set_penalty_params(slots)  # neutral: a freed slot never selects the penalized traces
 
     def release_traces(self):
         for tid, logits, sid in self.traces.values():
@@ -848,13 +1080,15 @@ class Lfm2Generator(Generator):
         for t in (
             self.pf_sample_trace,
             self.append_trace,
+            self.pf_sample_pen_trace,
             *self.prefill_traces.values(),
             *self.sample_hist_traces.values(),
+            *self.pen_traces.values(),
         ):
             if t is not None:
                 ttnn.release_trace(self.mesh, t)
         self.traces, self.pf_sample_trace, self.append_trace, self.prefill_traces = {}, None, None, {}
-        self.sample_hist_traces = {}
+        self.sample_hist_traces, self.pen_traces, self.pf_sample_pen_trace = {}, {}, None
 
     def teardown(self):
         """Explicit end of the trace lifetime (the readiness runners call it after a run).  A shared generator

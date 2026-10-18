@@ -302,5 +302,29 @@
     ],
     "non_aligned_prompts": "full model served prompt lengths 129/130/131/3000/4200/5000/~12050 (doc/vllm_integration/logs/mixed_shape_full_track3, readiness_vllm/prefix_cache) and 2049 on the reduced target; adapter tests 1..4100 non-aligned (doc/vllm_integration/logs/test_generator_vllm_full_r5.log)",
     "evidence": "readiness_vllm/server.log (runner --stages serve, final code: logs/runner_final3_serve_cmd.txt), doc/vllm_integration/logs/check_09.log"
+  },
+  "optimized_vllm": {
+    "served_max_model_len": 131072,
+    "current_supported_context": 131072,
+    "capability_reduction": null,
+    "max_num_seqs": 32,
+    "max_num_batched_tokens": 2048,
+    "tt_config": {
+      "prefill_chunk_alignment": 2048,
+      "decode_interleave_prefill_steps": 1,
+      "trace_region_size": 805306368,
+      "l1_small_size": 24576
+    },
+    "kv_cache": "unchanged from vllm_integration: vLLM pool 65568 blocks + 2048 adapter scratch blocks, BFP8, [67616, 2, 64, 64] per chip per attention layer",
+    "prefix_caching": "enabled; ShortConv snapshot grid 512 tokens (chunk ends + in-chunk taps of the >= 1024-row chunks), pool 256 entries x 1.9 MB per chip; chunk starts 512-aligned (model CHUNK_ALIGN)",
+    "persistent_allocation_changes": [
+      "ShortConv snapshot pool 128 -> 256 entries (~0.49 GiB per chip)",
+      "ShortConv tap buffers: 2 x [32, 512] bf16 per ShortConv layer per chip (30 layers, ~2 MB per chip) + 3 tap-row selections",
+      "prefill tap selections tap0/tap1 [32, 32 + S] for buckets 1024 / 2048 (< 0.5 MB per chip)",
+      "device penalties (TTPenalties): prompt / output masks + counts [32, 32256] int32 per chip, replicated gathered counts and zeros [32, 129024] int32 (~45 MB per chip); 7 penalized sampling traces (6 decode buckets + prefill)"
+    ],
+    "sampling": "device top-k cap stays 32 (ttnn.sampling keeps 32 candidates); device penalties in vLLM order (bf16); top_k 33-64 and logprobs / min_p / bad_words / structured output are host-sampled",
+    "non_aligned_prompts": "served lengths 77/129/130/131/150/160/200/300/1500/2724/3000/4200/5000/~12050 in doc/optimized_vllm/tracked/mixed_shape and after/mixed_shape; adapter tests 1..4100 (doc/optimized_vllm/logs/adapter_tests_full_r6.log)",
+    "evidence": "doc/optimized_vllm/README.md, readiness_vllm/ (final runner round 2), doc/optimized_vllm/logs/runner_final_r2_*, doc/optimized_vllm/perf_summary.json"
   }
 }

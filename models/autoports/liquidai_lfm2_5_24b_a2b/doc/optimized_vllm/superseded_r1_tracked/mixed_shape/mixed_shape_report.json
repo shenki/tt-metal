@@ -1,0 +1,794 @@
+{
+ "wall_s": 10.53442566699232,
+ "requests": 28,
+ "completed_tokens": 955,
+ "completed_request_throughput_tok_s": 90.65515579006043,
+ "ttft_s": {
+  "p50": 0.11343477800255641,
+  "p95": 0.6527157239906956,
+  "p99": 0.6531108880008105,
+  "max": 0.6531108880008105
+ },
+ "itl_s": {
+  "p50": 0.011791196011472493,
+  "p95": 0.04025320097571239,
+  "p99": 0.1592971610079985,
+  "max": 0.17386394401546568
+ },
+ "decode_pauses_over_250ms": 0,
+ "determinism_greedy": {
+  "u129": true,
+  "u130": true,
+  "u131": true,
+  "d77": true,
+  "p4200": true,
+  "pg": true,
+  "p2700": true
+ },
+ "traces_before_workload": {
+  "captures": [
+   27,
+   16
+  ],
+  "inventory": {
+   "t": 1792327956.6280143,
+   "kind": "traces_ready",
+   "step": 0,
+   "captures": 27,
+   "prefill_captures": 16,
+   "model_replays": 0,
+   "sampling_replays": 0,
+   "prefill_replays": 0,
+   "eager_chunks": 0,
+   "penalized_replays": 0,
+   "penalty_resets": 0,
+   "penalty_stale_replays": 0,
+   "seed_readbacks": 0,
+   "token_readbacks": 0,
+   "token_refreshes": 0,
+   "position_refreshes": 0,
+   "page_table_refreshes": 0,
+   "snapshots": {
+    "stores": 0,
+    "store_hits": 0,
+    "tap_stores": 0,
+    "restores": 0,
+    "in_slot": 0,
+    "recompute_tokens": 0,
+    "evictions": 0,
+    "scratch_rows": 0
+   },
+   "decode": {
+    "1": [
+     16,
+     17,
+     18
+    ],
+    "2": [
+     23,
+     24,
+     25
+    ],
+    "4": [
+     27,
+     28,
+     29
+    ],
+    "8": [
+     31,
+     32,
+     33
+    ],
+    "16": [
+     35,
+     36,
+     37
+    ],
+    "None": [
+     39,
+     40,
+     41
+    ]
+   },
+   "prefill": {
+    "(32, False, 'last')": 0,
+    "(32, True, 'last')": 1,
+    "(64, False, 'last')": 2,
+    "(64, True, 'last')": 3,
+    "(128, False, 'last')": 4,
+    "(128, True, 'last')": 5,
+    "(256, False, 'last')": 6,
+    "(256, True, 'last')": 7,
+    "(512, False, 'last')": 8,
+    "(512, True, 'last')": 9,
+    "(1024, False, 'last')": 10,
+    "(1024, True, 'last')": 11,
+    "(2048, False, 'last')": 12,
+    "(2048, True, 'last')": 13,
+    "(2048, False, 'none')": 14,
+    "(2048, True, 'none')": 15
+   },
+   "prefill_sampler": 20,
+   "penalized": {
+    "1": 19,
+    "2": 26,
+    "4": 30,
+    "8": 34,
+    "16": 38,
+    "None": 42
+   },
+   "prefill_penalized_sampler": 22,
+   "counters": {
+    "prefill_trace_captures": 16,
+    "trace_captures": 27
+   },
+   "trace_bytes_per_bank": 71912448
+  }
+ },
+ "traces_after_workload": {
+  "captures": [
+   27,
+   16
+  ]
+ },
+ "recaptures": [
+  0,
+  0
+ ],
+ "prefill_chunk_rows": [
+  {
+   "start": 0,
+   "end": 130,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 131,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 77,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 300,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 1500,
+   "slot": 2,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 2048,
+   "slot": 3,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 2048,
+   "end": 3000,
+   "slot": 3,
+   "recompute_from": 2048,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 2048,
+   "slot": 4,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 2048,
+   "end": 4096,
+   "slot": 4,
+   "recompute_from": 2048,
+   "device_sampling": false
+  },
+  {
+   "start": 4096,
+   "end": 5000,
+   "slot": 4,
+   "recompute_from": 4096,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 129,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 64,
+   "end": 77,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 131,
+   "slot": 2,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 131,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 129,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 200,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 129,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 130,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 0,
+   "end": 150,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 128,
+   "end": 130,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 4096,
+   "end": 4200,
+   "slot": 0,
+   "recompute_from": 4096,
+   "device_sampling": true
+  },
+  {
+   "start": 4160,
+   "end": 4200,
+   "slot": 0,
+   "recompute_from": 4096,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 140,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 160,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 140,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 129,
+   "slot": 2,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 90,
+   "slot": 3,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 120,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 2624,
+   "end": 2700,
+   "slot": 0,
+   "recompute_from": 2560,
+   "device_sampling": true
+  },
+  {
+   "start": 2688,
+   "end": 2700,
+   "slot": 0,
+   "recompute_from": 2560,
+   "device_sampling": true
+  }
+ ],
+ "continuation_starts": [
+  64,
+  128,
+  2048,
+  2624,
+  2688,
+  4096,
+  4160
+ ],
+ "recompute_starts": [
+  0,
+  2048,
+  2560,
+  4096
+ ],
+ "decode_steps": 579,
+ "decode_modes": {
+  "rows=1 device resident": 269,
+  "rows=1 device reload reset": 13,
+  "rows=2 device reload reset remap": 3,
+  "rows=2 device resident": 61,
+  "rows=2 device page": 2,
+  "rows=4 device reload reset remap": 5,
+  "rows=4 device resident": 71,
+  "rows=4 device reload reset": 3,
+  "rows=4 device page": 2,
+  "rows=2 device reload reset": 2,
+  "rows=2 host reload": 15,
+  "rows=1 device reload reset pen": 2,
+  "rows=1 device resident pen": 60,
+  "rows=2 device reload reset remap pen": 2,
+  "rows=4 device reload reset remap pen": 3,
+  "rows=4 device resident pen": 22,
+  "rows=2 device page pen": 1,
+  "rows=2 device resident pen": 19,
+  "rows=1 device reload reset remap pen": 1,
+  "rows=1 host reload": 23
+ },
+ "penalized_decode_steps": 110,
+ "penalty_history_resets": 110,
+ "penalty_stale_replays": 0,
+ "seed_readbacks": 0,
+ "snapshot_stats": {
+  "stores": 16,
+  "store_hits": 0,
+  "tap_stores": 13,
+  "restores": 5,
+  "in_slot": 2,
+  "recompute_tokens": 2176,
+  "evictions": 0,
+  "scratch_rows": 24
+ },
+ "per_request": {
+  "u129": [
+   {
+    "phase": "unseen_129",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.08145845698891208,
+    "total": 0.28953923800145276,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_a",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.13930562400491908,
+    "total": 0.5368079240142833,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_b",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.09276932102511637,
+    "total": 0.3272258980141487,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "penalized_mixed",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.14643529301974922,
+    "total": 0.6814748850010801,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "u130": [
+   {
+    "phase": "unseen_130",
+    "text": " place Pediatricservices Deark\u00f6-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le",
+    "ttft": 0.08352011500392109,
+    "total": 0.2902966359979473,
+    "chunks": 24,
+    "prompt_len": 130,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "switch_back_greedy",
+    "text": " place Pediatricservices Deark\u00f6-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le",
+    "ttft": 0.08002818998647854,
+    "total": 0.2928394149930682,
+    "chunks": 24,
+    "prompt_len": 130,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "u131": [
+   {
+    "phase": "unseen_131",
+    "text": "\u30a2\u30eb\nTerm.1 originallyCheckluence-Af\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef",
+    "ttft": 0.08367747301235795,
+    "total": 0.2921886960102711,
+    "chunks": 24,
+    "prompt_len": 131,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_a",
+    "text": "\u30a2\u30eb\nTerm.1 originallyCheckluence-Af\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef",
+    "ttft": 0.231477604014799,
+    "total": 0.5541941330011468,
+    "chunks": 24,
+    "prompt_len": 131,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_b",
+    "text": "\u30a2\u30eb\nTerm.1 originallyCheckluence-Af\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef",
+    "ttft": 0.07788304399582557,
+    "total": 0.3829362189862877,
+    "chunks": 24,
+    "prompt_len": 131,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "d77": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "\u7684Princess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess",
+    "ttft": 0.07326353501412086,
+    "total": 2.0818171320133843,
+    "chunks": 96,
+    "prompt_len": 77,
+    "max_tokens": 96,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_a",
+    "text": "\u7684Princess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess",
+    "ttft": 0.13860439500422217,
+    "total": 0.5365152499871328,
+    "chunks": 24,
+    "prompt_len": 77,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "c3000": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t",
+    "ttft": 0.33093824100797065,
+    "total": 1.2156208520173095,
+    "chunks": 32,
+    "prompt_len": 3000,
+    "max_tokens": 32,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "c5000": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "ance ambulance_medical_0.0.0.0.0.0.0.0.0.0.0.0.0",
+    "ttft": 0.5059953560121357,
+    "total": 0.9517180339898914,
+    "chunks": 32,
+    "prompt_len": 5000,
+    "max_tokens": 32,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "d300": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259\u75db\u7259",
+    "ttft": 0.11197034097858705,
+    "total": 2.240088759979699,
+    "chunks": 96,
+    "prompt_len": 300,
+    "max_tokens": 96,
+    "params": {
+     "temperature": 0.7,
+     "top_k": 20,
+     "top_p": 0.9
+    }
+   }
+  ],
+  "d1500": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "S, 1.2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0",
+    "ttft": 0.1819708270195406,
+    "total": 2.1151298210024834,
+    "chunks": 96,
+    "prompt_len": 1500,
+    "max_tokens": 96,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "s1": [
+   {
+    "phase": "switch_sampled",
+    "text": " jungle Italy Florence's's's's's's's's's's's's's's's's's's's's's",
+    "ttft": 0.17691770600504242,
+    "total": 0.42312063998542726,
+    "chunks": 24,
+    "prompt_len": 200,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.7,
+     "top_k": 20,
+     "top_p": 0.9
+    }
+   }
+  ],
+  "g1": [
+   {
+    "phase": "switch_sampled",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.1758451540081296,
+    "total": 0.4224557910056319,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "h1": [
+   {
+    "phase": "switch_host_logprobs",
+    "text": "big's latest latest latest latest latest latest latest latest latest latest latest latest latest latest",
+    "ttft": 0.6531108880008105,
+    "total": 0.6563225380086806,
+    "chunks": 2,
+    "prompt_len": 150,
+    "max_tokens": 16,
+    "params": {
+     "temperature": 0.0,
+     "logprobs": 3
+    }
+   }
+  ],
+  "g2": [
+   {
+    "phase": "switch_host_logprobs",
+    "text": " place Pediatricservices Deark\u00f6-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le",
+    "ttft": 0.6527157239906956,
+    "total": 0.7172859649872407,
+    "chunks": 9,
+    "prompt_len": 130,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "p4200": [
+   {
+    "phase": "prefix_hit",
+    "text": " 1.5mm 1.5mm 1.5mm 1.5mm 1.5",
+    "ttft": 0.10218433299451135,
+    "total": 0.3114255749969743,
+    "chunks": 24,
+    "prompt_len": 4200,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "prefix_control",
+    "text": " 1.5mm 1.5mm 1.5mm 1.5mm 1.5",
+    "ttft": 0.11266729098861106,
+    "total": 0.32105517500895076,
+    "chunks": 24,
+    "prompt_len": 4200,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "pg": [
+   {
+    "phase": "penalized_alone",
+    "text": "\u043a\u0438\u044f\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0e22\nThe user\u2019s request is a huge block of text that appears to be garbled, containing many different fragments: \"your\" ...",
+    "ttft": 0.11343477800255641,
+    "total": 0.6612472209963016,
+    "chunks": 48,
+    "prompt_len": 140,
+    "max_tokens": 48,
+    "params": {
+     "temperature": 0.0,
+     "repetition_penalty": 1.3,
+     "presence_penalty": 0.5,
+     "frequency_penalty": 0.3
+    }
+   },
+   {
+    "phase": "penalized_mixed",
+    "text": "\u043a\u0438\u044f\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0439\u0e22\nThe user\u2019s request is a huge block of text that appears to be garbled, containing many different fragments: \"your\" ...",
+    "ttft": 0.15813140899990685,
+    "total": 1.2410738929756917,
+    "chunks": 48,
+    "prompt_len": 140,
+    "max_tokens": 48,
+    "params": {
+     "temperature": 0.0,
+     "repetition_penalty": 1.3,
+     "presence_penalty": 0.5,
+     "frequency_penalty": 0.3
+    }
+   }
+  ],
+  "late": [
+   {
+    "phase": "penalized_mixed",
+    "text": "Governance\n\nThe user is asking to \"fix\" the prompt. The prompt is a long string that includes many",
+    "ttft": 0.14104293700074777,
+    "total": 0.6149518140009604,
+    "chunks": 24,
+    "prompt_len": 90,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "ps": [
+   {
+    "phase": "penalized_mixed",
+    "text": "s. \u8c01\u90fd\u77e5\u9053,\u5728\u8fd9\u6837\u4e00\u4e2a\u95ee\u9898\u4e0a\uff0c\u4efb\u4f55\u4eba\u5982\u679c\u4e0d\u6b63\u786e\u90fd\u4f1a\u88ab\u8bc6\u522b\u5230\u3002\n\nThe correct answer should be: \"The problem is designed to test whether the student can correctly identify the button's attachment point or if they are distracted by irrelevant details.\"\n\nBut perhaps there's a specific term",
+    "ttft": 0.1107803400082048,
+    "total": 1.5255866590014193,
+    "chunks": 64,
+    "prompt_len": 160,
+    "max_tokens": 64,
+    "params": {
+     "temperature": 0.7,
+     "top_k": 20,
+     "top_p": 0.9,
+     "repetition_penalty": 1.1,
+     "frequency_penalty": 0.2
+    }
+   }
+  ],
+  "gc": [
+   {
+    "phase": "genconfig_host",
+    "text": " Janet\u4e14266 SterileCard creatures, but 266 SterileCard creatures, but 266 SterileCard creatures,",
+    "ttft": 0.09138680199976079,
+    "total": 0.7746584489941597,
+    "chunks": 24,
+    "prompt_len": 120,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.1,
+     "top_k": 50,
+     "repetition_penalty": 1.05
+    }
+   }
+  ],
+  "p2700": [
+   {
+    "phase": "prefix_hit_512",
+    "text": "\u7684\n 1.1.1.1.1.1.1.1.1.1.1",
+    "ttft": 0.09931268900982104,
+    "total": 0.31185231800191104,
+    "chunks": 24,
+    "prompt_len": 2700,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "prefix_control_512",
+    "text": "\u7684\n 1.1.1.1.1.1.1.1.1.1.1",
+    "ttft": 0.09861789899878204,
+    "total": 0.3114696849952452,
+    "chunks": 24,
+    "prompt_len": 2700,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ]
+ },
+ "pass": true
+}

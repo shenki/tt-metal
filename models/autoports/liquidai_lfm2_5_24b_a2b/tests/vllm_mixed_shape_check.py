@@ -5,7 +5,9 @@
 Workload (one live server, no restart, no per-signature warm-up): unseen non-aligned lengths, chunked long prompts
 arriving while other requests decode (continuation starts 2048 / 4096, partial final chunks), repeats of known lengths
 in different batch compositions / orders, greedy -> sampled -> host-sampled (logprobs) -> greedy switches and a
-prefix-cache hit.  Reports per-request TTFT / ITL, decode pauses and throughput, and from the adapter events the
+prefix-cache hit; device penalties (penalized greedy repeated in two batch compositions, penalized sampling, an
+admission while penalized rows decode), checkpoint-default host sampling (top_k 50) and a hit on the 512-token
+ShortConv grid.  Reports per-request TTFT / ITL, decode pauses and throughput, and from the adapter events the
 actual chunk rows (start, end, slot, recompute start), decode buckets / reload modes and the trace capture counters
 (must not change after warm-up).  Greedy determinism: identical requests must produce identical text in every batch.
 
@@ -33,7 +35,8 @@ def _ids(n, seed):
 
 def stream(url, prompt, max_tokens, **params):
     """Streaming /v1/completions; returns dict(text, ttft, itl list, total, tokens)."""
-    body = dict(model=MODEL, prompt=prompt, max_tokens=max_tokens, stream=True, repetition_penalty=1.0, **params)
+    body = dict(model=MODEL, prompt=prompt, max_tokens=max_tokens, stream=True, repetition_penalty=1.0)
+    body.update(params)
     t0 = time.perf_counter()
     times, text = [], []
     with requests.post(f"{url}/v1/completions", json=body, stream=True, timeout=1800) as r:
@@ -147,6 +150,29 @@ def main():
     # 5. prefix-cache hit: 4096 tokens shared with c5000 + a new tail (chunk start lands mid-prompt)
     phases.append(("prefix_hit", run_batch(a.url, [("p4200", long5[:4096] + _ids(104, 41), 24, greedy)])))
     phases.append(("prefix_control", run_batch(a.url, [("p4200", long5[:4096] + _ids(104, 41), 24, greedy)])))
+    # 6. device penalties / checkpoint defaults / 512-grid hit
+    pen_greedy = dict(temperature=0.0, repetition_penalty=1.3, presence_penalty=0.5, frequency_penalty=0.3)
+    pen_sampled = dict(temperature=0.7, top_k=20, top_p=0.9, repetition_penalty=1.1, frequency_penalty=0.2)
+    genconfig = dict(temperature=0.1, top_k=50, repetition_penalty=1.05)  # checkpoint generation_config: host sampled
+    phases.append(("penalized_alone", run_batch(a.url, [("pg", _ids(140, 140), 48, pen_greedy)])))
+    phases.append(
+        (
+            "penalized_mixed",
+            run_batch(
+                a.url,
+                [
+                    ("ps", _ids(160, 160), 64, pen_sampled),
+                    ("pg", _ids(140, 140), 48, pen_greedy),
+                    ("u129", _ids(129, 129), 24, greedy),
+                    ("late", _ids(90, 90), 24, greedy),  # admitted while the penalized rows decode
+                ],
+                stagger=0.15,
+            ),
+        )
+    )
+    phases.append(("genconfig_host", run_batch(a.url, [("gc", _ids(120, 120), 24, genconfig)])))
+    phases.append(("prefix_hit_512", run_batch(a.url, [("p2700", long5[:2624] + _ids(76, 42), 24, greedy)])))
+    phases.append(("prefix_control_512", run_batch(a.url, [("p2700", long5[:2624] + _ids(76, 42), 24, greedy)])))
     wall = time.perf_counter() - t_start
 
     # ---- analysis
@@ -161,8 +187,8 @@ def main():
             m = min(len(r["text"]) for r in g)
             determinism[name] = all(r["text"][:m] == g[0]["text"][:m] for r in g)
     # u129 / u131 / u130 also ran with other max_tokens: compare common prefixes only (done above)
-    ev = [json.loads(l) for l in open(ev_path)][n_ev0:]
-    before = [json.loads(l) for l in open(ev_path)][:n_ev0]
+    ev = [e for e in map(json.loads, open(ev_path)) if e.get("kind") != "bench_mark"][n_ev0:]
+    before = [e for e in map(json.loads, open(ev_path)) if e.get("kind") != "bench_mark"][:n_ev0]
     ready = [e for e in before if e["kind"] == "traces_ready"]
     cap0 = (before[-1]["captures"], before[-1]["prefill_captures"]) if before else None
     cap1 = (ev[-1]["captures"], ev[-1]["prefill_captures"]) if ev else cap0
@@ -201,13 +227,24 @@ def main():
             f"rows={e['rows']} {'device' if e['device_sampling'] else 'host'} "
             f"{'reload' if e['reload_inputs'] else ('page' if e['reload_page_table'] else 'resident')}"
             f"{' reset' if e['reset_sampling_state'] else ''}{' remap' if e['remap'] else ''}"
+            f"{' pen' if e.get('penalized') else ''}"
             for e in dec
         ),
+        penalized_decode_steps=sum(bool(e.get("penalized")) for e in dec),
+        penalty_history_resets=sum(bool(e.get("histories")) for e in dec),
+        penalty_stale_replays=(ev[-1].get("penalty_stale_replays", 0) - ev[0].get("penalty_stale_replays", 0))
+        if ev
+        else 0,
+        seed_readbacks=(ev[-1].get("seed_readbacks", 0) - ev[0].get("seed_readbacks", 0)) if ev else 0,
         snapshot_stats=ev[-1]["snapshots"] if ev else None,
         per_request={k: [{kk: vv for kk, vv in r.items() if kk not in ("itl",)} for r in v] for k, v in reqs.items()},
     )
     report["pass"] = bool(
-        report["recaptures"] == (0, 0) and all(determinism.values()) and report["continuation_starts"]
+        report["recaptures"] == (0, 0)
+        and all(determinism.values())
+        and report["continuation_starts"]
+        and report["penalty_stale_replays"] == 0
+        and report["seed_readbacks"] == 0
     )
     (out / "mixed_shape_report.json").write_text(json.dumps(report, indent=1, default=str))
     print(
@@ -224,6 +261,9 @@ def main():
                     "itl_s",
                     "decode_pauses_over_250ms",
                     "decode_modes",
+                    "penalized_decode_steps",
+                    "penalty_stale_replays",
+                    "seed_readbacks",
                     "snapshot_stats",
                 )
             },

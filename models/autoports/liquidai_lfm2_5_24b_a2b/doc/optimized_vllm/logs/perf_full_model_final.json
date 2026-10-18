@@ -1,0 +1,137 @@
+{
+ "layers": "all",
+ "reference": "bringup/references/lfm2_5_24b_a2b_aime24_chat.refpt",
+ "build_prepare_s": 182.24845387999085,
+ "model_build_s": {
+  "globals_head": 1.0990363989840262,
+  "layers": 101.88875759500661
+ },
+ "precision": {
+  "config_id": "C1",
+  "source": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/doc/datatype_sweep/selected_precision_config.json"
+ },
+ "perf": {
+  "workload": "batch 1, prompt 128 / generate 128, greedy",
+  "first_request_ttft_ms": 799.5047960139345,
+  "token_out_counters_per_request": {
+   "history_cursor_refreshes": 1,
+   "position_refreshes": 1,
+   "rope_refreshes": 1,
+   "mask_refreshes": 2,
+   "token_refreshes": 1,
+   "prefill_input_refreshes": 11,
+   "prefill_replays": 1,
+   "prefill_chunks": 1,
+   "prefill_sampling_replays": 1,
+   "token_readbacks": 1,
+   "model_replays": 127,
+   "sampling_replays": 127,
+   "history_appends": 127,
+   "history_readbacks": 1
+  },
+  "ttft_ms": 65.63350002397783,
+  "token_out_tok_s_u": 108.00796048016265,
+  "token_out_ms_step": 9.258576826692932,
+  "teacher_forcing_tok_s_u": 105.82934921146067,
+  "teacher_forcing_ms_step": 9.449174614141029,
+  "ttft_ms_by_prompt_len": {
+   "128": 64.2442209937144,
+   "1024": 95.65988800022751,
+   "2048": 132.88144301623106,
+   "4100": 296.22155902325176
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840
+  },
+  "prefill_capture_s": {
+   "(128, False, 'last')": 0.46400654400349595,
+   "(1024, False, 'last')": 0.5225891129812226,
+   "(2048, False, 'last')": 0.526733808015706,
+   "(2048, False, 'none')": 0.5377358649857342,
+   "(2048, True, 'none')": 0.5262160869897343,
+   "(32, True, 'last')": 0.31085172898019664
+  },
+  "logits_only_ms_step": 9.05478471016977,
+  "sampling_only_ms_step": 0.3146831598132849,
+  "model_plus_sampling_ms_step": 9.370531660097186,
+  "batch_token_out_ms_step": {
+   "1": 9.255880593627808,
+   "4": 13.627327422000235,
+   "8": 19.08292048437943,
+   "32": 26.102418702976138
+  },
+  "trace_region_used": {
+   "largest_contiguous_bytes_free_per_bank": 65926144,
+   "num_banks": 8,
+   "total_bytes_allocated_per_bank": 34737152,
+   "total_bytes_free_per_bank": 65926144,
+   "total_bytes_per_bank": 100663296
+  },
+  "token_out_eos_polling_tok_s_u": 107.23163456222517,
+  "force_argmax": {
+   "token_out_tok_s_u": 101.70149076471317,
+   "sampling_only_ms_step": 0.888092250097543,
+   "same_tokens_as_split_greedy": true
+  }
+ },
+ "perf_wall_s": 38.844935126981,
+ "perf_counters": {
+  "sampling_param_refreshes": 1,
+  "history_cursor_refreshes": 64,
+  "position_refreshes": 59,
+  "rope_refreshes": 59,
+  "mask_refreshes": 116,
+  "token_refreshes": 59,
+  "seed_refreshes": 30,
+  "resets": 30,
+  "page_table_refreshes": 1,
+  "prefill_input_refreshes": 858,
+  "prefill_trace_captures": 7,
+  "prefill_replays": 78,
+  "prefill_chunks": 78,
+  "trace_captures": 19,
+  "prefill_sampling_replays": 29,
+  "token_readbacks": 410,
+  "model_replays": 1315,
+  "sampling_replays": 1315,
+  "history_appends": 930,
+  "history_readbacks": 33
+ },
+ "perf_last_perf": {
+  "prepare_s": 7.068495018000249,
+  "prefill_capture_s": {
+   "(128, False, 'last')": 0.46400654400349595,
+   "(1024, False, 'last')": 0.5225891129812226,
+   "(2048, False, 'last')": 0.526733808015706,
+   "(2048, False, 'none')": 0.5377358649857342,
+   "(2048, True, 'none')": 0.5262160869897343,
+   "(32, True, 'last')": 0.31085172898019664,
+   "(64, False, 'last')": 0.34575820100144483
+  },
+  "prefill_trace_bytes_per_bank": {
+   "(128, False, 'last')": 3645440,
+   "(1024, False, 'last')": 4251648,
+   "(2048, False, 'last')": 4341760,
+   "(2048, False, 'none')": 4333568,
+   "(2048, True, 'none')": 4333568,
+   "(32, True, 'last')": 2211840,
+   "(64, False, 'last')": 2146304
+  },
+  "capture_s": {
+   "1": 0.2708351470064372,
+   "4": 0.34613453497877344,
+   "8": 0.33570079898345284,
+   "None": 0.3415114269882906
+  },
+  "ttft_s": 0.06552327101235278,
+  "decode_steps": 127,
+  "decode_s": 1.176535895006964,
+  "decode_tok_s_u": 107.94400794652192,
+  "mode": "token_out"
+ }
+}

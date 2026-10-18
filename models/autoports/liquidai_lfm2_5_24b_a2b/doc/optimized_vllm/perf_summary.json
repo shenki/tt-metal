@@ -1,0 +1,68 @@
+{
+ "stage": "optimized_vllm (stage 10)",
+ "workload": {
+  "profile": "single_user_decode",
+  "prompt_len": 128,
+  "gen_len": 128,
+  "batch": 1,
+  "concurrency": 1,
+  "sampling": "greedy, --temperature 0.0 --repetition-penalty 1.0, ignore_eos",
+  "harness": "readiness_check.run_vllm_server --stages qualitative,benchmark (vllm bench serve)"
+ },
+ "ttft_ms": 72.04,
+ "decode_ms_per_token_e2e": 9.248,
+ "decode_tok_s_u": 108.13,
+ "itl_ms": {
+  "p50": 9.24,
+  "p99": 9.52
+ },
+ "decode_ms_per_token_device": null,
+ "roofline_ms_per_token_estimate": 1.354,
+ "device_time_null_reason": "vllm_serving_profiler_disabled_to_protect_hardware (the stage goal forbids Tracy / device profiler on the live server); standalone device-time accounting: doc/optimized_full_model/perf_summary.json (8.619 ms device, 9.356 ms e2e at stage 7; stage-10 standalone traced token-out 9.26 ms/step, logs/perf_full_model_final.json)",
+ "standalone_full_model_reference": {
+  "decode_ms_per_token_e2e": 9.26,
+  "ttft_ms_128": 64.2,
+  "source": "doc/optimized_vllm/logs/perf_full_model_final.json"
+ },
+ "ci_serving_burst": {
+  "workload": "100 in / 100 out / 32 requests, all admitted at once, greedy + --repetition-penalty 1.0",
+  "ttft_ms_p50": 1321.83,
+  "ttft_ms_p99": 1929.08,
+  "tpot_ms_mean": 29.14,
+  "tpot_ms_p99": 38.73,
+  "itl_ms_p50": 24.26,
+  "itl_ms_p99": 104.16,
+  "output_tok_s": 721.84,
+  "tpot_derived_tok_s_u": 34.32
+ },
+ "other_sampling_modes_single_user_128_128": {
+  "top_k20_temp0.1": {
+   "tok_s_u": 108.05,
+   "sampler": "device",
+   "source": "after/summary.json"
+  },
+  "top_k20_temp0.1_rep1.05": {
+   "tok_s_u": 85.51,
+   "ttft_ms": 105.76,
+   "sampler": "device (penalized trace)",
+   "source": "tracked/summary.json"
+  },
+  "checkpoint_defaults_top_k50_rep1.05": {
+   "tok_s_u": 34.66,
+   "ttft_ms": 90.65,
+   "sampler": "host (top_k > 32)",
+   "source": "after/summary.json"
+  }
+ },
+ "named_limitations": [
+  "ttnn.sampling keeps 32 candidates (kernels/compute/sampling.cpp nearest32_K = 32): top_k 33-64, including the checkpoint default top_k 50, is host-sampled (user decision: exact semantics)",
+  "host-sampled steps: vLLM CPU sampler 6-9 ms (1 row) / 155-165 ms (32 rows) + logits readback 6.6 ms (per-device to_torch; ConcatMeshToTensor 83.9 ms was removed)",
+  "penalized device steps +2.4 ms: penalty ops + the plugin excludes steps carrying penalty histories from its overlapped fast path (async_decode.py:624-628)",
+  "device penalties use bf16 arithmetic (vLLM order): near-tie greedy choices can differ from vLLM fp32 host penalties",
+  "penalty history rebuild at decode transitions while a penalized request is live: ~30-45 ms on that step for all rows",
+  "decode_interleave_prefill_steps 1: no decode pauses > 250 ms for a few users, CI-burst ITL P99 rises 64 -> 104 ms",
+  "intermediate 2048-token prefill chunks are host-logits steps (plugin): ~142 ms per step incl. 6.6 ms readback",
+  "greedy output depends on decode-bucket composition (pre-existing TT numerics; stage-9 standalone control): two plugin determinism tests flake"
+ ],
+ "source": "readiness_vllm/vllm_benchmark.json, vllm_result.json, vllm_ci_serving_benchmark.json (runner round 2, logs/runner_final_r2_*)"
+}

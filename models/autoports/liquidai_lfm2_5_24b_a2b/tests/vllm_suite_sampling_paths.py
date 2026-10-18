@@ -21,6 +21,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--url", default="http://localhost:8000")
     ap.add_argument("--ignore", default="spec")
+    ap.add_argument("--fail-dir", default=None, help="write the pytest output of every non-passing test here")
     a = ap.parse_args()
     plugin = Path(os.environ["VLLM_TT_PLUGIN_ROOT"])
     root = plugin / "tests" / "tt"
@@ -64,6 +65,9 @@ def main():
                 decode_device_resident=sum(e["device_sampling"] and not e["reload_inputs"] for e in dec),
             )
         )
+        if a.fail_dir and rows[-1]["outcome"] != "passed":
+            Path(a.fail_dir).mkdir(parents=True, exist_ok=True)
+            (Path(a.fail_dir) / (rows[-1]["test"].replace("/", "_").replace("::", "__") + ".log")).write_text(r.stdout)
         print(rows[-1], flush=True)
     Path(a.out).write_text(json.dumps(rows, indent=1))
     from collections import Counter

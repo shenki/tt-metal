@@ -12,18 +12,21 @@ all live there.  This module only maps plugin keyword arguments onto the generat
 * slots: plugin state slot ``i`` = generator slot ``i`` (ShortConv state row, sampling row, decode row; decode rows are
   front-packed after ``slot_remap``).
 * ShortConv state across prefill calls: the plugin may move a request to another slot between prefill chunks and a
-  prefix-cache hit starts a request mid-prompt, so conv state is carried by content, not by slot: after every chunk that
-  ends on the 2048-token grid the slot's state is snapshotted into a preallocated pool keyed by a hash of the token
+  prefix-cache hit starts a request mid-prompt, so conv state is carried by content, not by slot: the state at every
+  512-token grid boundary (``CHUNK_ALIGN``; chunk ends, and inner boundaries of the >= 1024-row chunks, whose state the
+  traced chunk taps into per-layer buffers) is snapshotted into a preallocated pool keyed by a hash of the token
   history (``_ConvSnapshots``).  A chunk starting at ``P > 0`` uses the highest grid boundary ``Q <= P`` whose state is
   either already in its slot or in the pool, and recomputes ``[Q, P)`` (worst case ``Q = 0``).  The recompute writes
   its K/V into adapter-owned scratch blocks past the vLLM pool (a full page-table row: any walk-down fits) (the chunk's page-table entries for ``[Q, P)`` point
   there), never into the cached blocks vLLM handed the request: those may be shared with a live request, and a
   recompute through a different prefill bucket is not bitwise identical.  Prefill chunk programs only exist for
-  2048-aligned starts.
-* sampling: device sampling uses the generator's traced sampler (k <= 32, top-p, temperature); per-row seeds are
-  position-derived (``base(seed) + position``), so a seeded stream is independent of slot, batch and async timing.
-  Host sampling steps (selected by the plugin for logprobs, penalties, min_p, structured output, steps with
-  intermediate prefill chunks) get last-position logits: prefill from the traced chunks' persistent logits buffer,
+  512-aligned starts.
+* sampling: device sampling uses the generator's traced sampler (k <= 32, top-p, temperature) and device penalties
+  (presence / frequency / repetition: prompt masks set at prefill, every row's masks and output counts rebuilt from the
+  plugin's token histories on ``reset_sampling_state``, sampled tokens counted inside the penalized sampling trace);
+  per-row seeds are position-derived (``base(seed) + position``), so a seeded stream is independent of slot, batch and
+  async timing.  Host sampling steps (selected by the plugin for logprobs, min_p, bad words, structured output, steps
+  with intermediate prefill chunks) get last-position logits: prefill from the traced chunks' persistent logits buffer,
   decode from the model trace alone (sampler not replayed).  That compat path is never used for greedy / top-k
   benchmarks.
 """
@@ -41,10 +44,19 @@ from loguru import logger
 import ttnn
 from models.autoports.liquidai_lfm2_5_24b_a2b.tt.functional_decoder import TILE
 from models.autoports.liquidai_lfm2_5_24b_a2b.tt.generator import Lfm2Generator
-from models.autoports.liquidai_lfm2_5_24b_a2b.tt.model import BLOCK_SIZE, PREFILL_BUCKETS, PREFILL_CHUNK, Lfm2Model
+from models.autoports.liquidai_lfm2_5_24b_a2b.tt.model import (
+    BLOCK_SIZE,
+    CHUNK_ALIGN,
+    PREFILL_BUCKETS,
+    PREFILL_CHUNK,
+    Lfm2Model,
+)
 from models.autoports.liquidai_lfm2_5_24b_a2b.tt.optimized_decoder import DECODE_BUCKETS
 
-DEFAULT_SNAPSHOTS = 128  # ShortConv snapshot pool entries (1.9 MB per entry per chip)
+DEFAULT_SNAPSHOTS = 256  # ShortConv snapshot pool entries (1.9 MB per entry per chip; 512-token grid)
+# read at import: the plugin routes sampling from the class capabilities before the model is built
+MAX_DEVICE_TOP_K = int(os.environ.get("LFM2_MAX_DEVICE_TOP_K", "32"))
+DEVICE_PENALTIES = os.environ.get("LFM2_DEVICE_PENALTIES", "1") == "1"
 
 
 def _fabric_capability():
@@ -70,17 +82,17 @@ class _ConvSnapshots:
         self.free = list(range(entries))
         self.slot_key = [None] * batch
         self.stats = dict(
-            stores=0, store_hits=0, restores=0, in_slot=0, recompute_tokens=0, evictions=0, scratch_rows=0
+            stores=0, store_hits=0, tap_stores=0, restores=0, in_slot=0, recompute_tokens=0, evictions=0, scratch_rows=0
         )
 
     @staticmethod
     def chain(tokens, n_blocks):
-        """Hashes of the token history ending at each 2048-token boundary (``out[k]`` covers ``tokens[:2048 (k + 1)]``)."""
+        """Hashes of the token history ending at each grid boundary (``out[k]`` covers ``tokens[:CHUNK_ALIGN (k + 1)]``)."""
         out, h = [], b""
         t = torch.as_tensor(tokens, dtype=torch.int32).reshape(-1)
         for k in range(n_blocks):
             h = hashlib.blake2b(
-                h + t[k * PREFILL_CHUNK : (k + 1) * PREFILL_CHUNK].numpy().tobytes(), digest_size=16
+                h + t[k * CHUNK_ALIGN : (k + 1) * CHUNK_ALIGN].numpy().tobytes(), digest_size=16
             ).digest()
             out.append(h)
         return out
@@ -123,8 +135,8 @@ class TTLfm2MoeForCausalLM:
     decode_input_update_contract = 1
     model_capabilities = {
         "supports_sample_on_device": True,
-        "max_device_top_k": 32,
-        "supports_device_penalties": False,
+        "max_device_top_k": MAX_DEVICE_TOP_K,
+        "supports_device_penalties": DEVICE_PENALTIES,
         "supports_chunked_prefill": True,
         "supports_prefix_caching": True,
         "supports_async_decode": True,
@@ -252,6 +264,8 @@ class TTLfm2MoeForCausalLM:
             decode={str(b): [int(t[0]), int(t[2]), int(g.sample_hist_traces[b])] for b, t in g.traces.items()},
             prefill={str(k): int(v) for k, v in g.prefill_traces.items()},
             prefill_sampler=None if g.pf_sample_trace is None else int(g.pf_sample_trace),
+            penalized={str(b): int(t) for b, t in g.pen_traces.items()},
+            prefill_penalized_sampler=None if g.pf_sample_pen_trace is None else int(g.pf_sample_pen_trace),
             counters={k: int(v) for k, v in g.counters.items() if "capture" in k},
             trace_bytes_per_bank=int(g._trace_bytes()),
         )
@@ -259,10 +273,20 @@ class TTLfm2MoeForCausalLM:
     # ------------------------------------------------------------------------------------------
     # prefill
     # ------------------------------------------------------------------------------------------
+    @staticmethod
+    def _row(v, row, default):
+        """Per-row value of a TTSamplingParams field (list / tensor per row, or one scalar for all rows)."""
+        if v is None:
+            return default
+        if isinstance(v, (int, float)):
+            return v
+        return v[row]
+
     def _set_row_sampling(self, rows_slots, sampling_params, positions):
-        """Per-slot k / p / temperature and position-derived seeds of ``rows_slots`` [(row, slot)]."""
+        """Per-slot k / p / temperature, penalties and position-derived seeds of ``rows_slots`` [(row, slot)]."""
         sp = sampling_params
         seeds_rows, seeds_vals = [], []
+        cap = self.gen.max_top_k
         for row, slot in rows_slots:
             t = float(sp.temperature[row])
             k = int(sp.top_k[row])
@@ -270,9 +294,15 @@ class TTLfm2MoeForCausalLM:
             if t == 0.0 or k == 1:
                 self.gen.set_sampling_params(slots=[slot], top_k=1)
             else:
-                if not 1 <= k <= 32:
-                    raise ValueError(f"device sampling row {row}: top_k {k} outside 1..32 (max_device_top_k)")
+                if not 1 <= k <= cap:
+                    raise ValueError(f"device sampling row {row}: top_k {k} outside 1..{cap} (max_device_top_k)")
                 self.gen.set_sampling_params(slots=[slot], top_k=k, top_p=p, temperature=t)
+            self.gen.set_penalty_params(
+                [slot],
+                presence=float(self._row(sp.presence_penalty, row, 0.0)),
+                frequency=float(self._row(sp.frequency_penalty, row, 0.0)),
+                repetition=float(self._row(sp.repetition_penalty, row, 1.0)),
+            )
             seed = None if sp.seed is None else sp.seed[row]
             prev = self.seed_base[slot]
             if prev is None or prev[0] != seed or seed is None:
@@ -297,6 +327,7 @@ class TTLfm2MoeForCausalLM:
         """Rows ``i``: compute ``tokens[i, start_pos[i]:prompt_lens[i]]`` into slot ``empty_slots[i]`` (default ``i``).
         Returns sampled ids ``[B, 1]`` (device sampling) or last-position logits ``[B, 1, 128000]`` fp32 (host
         sampling; intermediate chunks' rows are produced too and dropped by the plugin)."""
+        t_in = time.perf_counter()
         self._check_cache(kv_cache)
         for k in ("page_tables_per_layer", "stage_inputs", "pixel_values"):
             if kwargs.get(k) is not None:
@@ -307,7 +338,7 @@ class TTLfm2MoeForCausalLM:
         ends = [int(x) for x in torch.as_tensor(prompt_lens).reshape(-1)]
         slots = list(range(B)) if empty_slots is None else [int(s) for s in empty_slots]
         page_table = torch.as_tensor(page_table, dtype=torch.int32).clone()
-        C = PREFILL_CHUNK
+        C = CHUNK_ALIGN
         eff, chains, rows_info = [], [], []
         for i in range(B):
             P, E, s = starts[i], ends[i], slots[i]
@@ -346,8 +377,15 @@ class TTLfm2MoeForCausalLM:
             eff.append(Q)
             rows_info.append([P, E, s, Q])
 
-        def on_chunk(b, end):
-            if end % C == 0 and self.model.conv_layers:
+        def on_chunk(b, end, taps=()):
+            if not self.model.conv_layers:
+                return
+            for r, q in taps:  # inner grid boundaries: the chunk left their state in tap row r
+                e = self.snaps.reserve(chains[b][q // C - 1])
+                if e is not None:
+                    self.model.snapshot_taps_into(r, e)
+                    self.snaps.stats["tap_stores"] += 1
+            if end % C == 0:
                 h = chains[b][end // C - 1]
                 e = self.snaps.reserve(h)
                 if e is not None:
@@ -363,6 +401,9 @@ class TTLfm2MoeForCausalLM:
         device = sampling_params is not None
         if device:
             self._set_row_sampling(list(enumerate(slots)), sampling_params, ends)
+            pen = [i for i in range(B) if self.gen.penalized([slots[i]])]
+            if pen:  # the first token's repetition penalty sees the whole prompt (not just this chunk)
+                self.gen.set_penalty_prompts([slots[i] for i in pen], [tokens[i, : ends[i]] for i in pen])
         out = self.gen.prefill_forward(
             chunk_tokens,
             page_table=page_table,
@@ -373,7 +414,7 @@ class TTLfm2MoeForCausalLM:
             host_logits=not device,
             on_chunk=on_chunk,
         )
-        self._event("prefill", rows=rows_info, device_sampling=device)
+        self._event("prefill", rows=rows_info, device_sampling=device, dur_s=round(time.perf_counter() - t_in, 6))
         if device:
             return torch.as_tensor(out, dtype=torch.int64).reshape(B, 1)
         return out
@@ -403,14 +444,18 @@ class TTLfm2MoeForCausalLM:
         RNG seeds unless reset on this step, and the resident token / position / page-table rows unless reloaded),
         then the host inputs (``reload_inputs``: tokens, positions, page tables; ``reload_page_table``: page tables
         only; neither: device-resident token feedback and positions), then sampling params / RNG state."""
+        t_in = time.perf_counter()
         self._check_cache(kv_cache)
         if "reset_batch" in kwargs:
             raise ValueError(
                 "legacy reset_batch is not accepted: this adapter implements decode_input_update_contract=1"
             )
-        for k in ("spec_mode", "defer_device_sampling", "page_tables_per_layer", "prompt_tokens", "output_tokens"):
+        for k in ("spec_mode", "defer_device_sampling", "page_tables_per_layer"):
             if kwargs.get(k) is not None and kwargs.get(k) is not False:
                 raise ValueError(f"unsupported decode input {k}")
+        prompt_tokens, output_tokens = kwargs.get("prompt_tokens"), kwargs.get("output_tokens")
+        if (prompt_tokens is None) != (output_tokens is None):
+            raise ValueError("prompt_tokens and output_tokens come together")
         if reload_inputs and reload_page_table:
             raise ValueError("reload_inputs already includes the page table")
         if reset_sampling_state and not reload_inputs:
@@ -439,6 +484,10 @@ class TTLfm2MoeForCausalLM:
                     seed = None if sp.seed is None else sp.seed[r]
                     self.seed_base[r] = (seed, _seed_base(seed))
             self._set_row_sampling([(r, r) for r in rows], sp, [int(c) + 1 for c in cur.tolist()])
+        if device and reset_sampling_state and prompt_tokens is not None:
+            # authoritative penalty history (row = slot); on other steps the histories are not needed: the device
+            # counts every sampled token itself
+            self.gen.reset_penalty_state(prompt_tokens, output_tokens)
         out = self.gen.decode_forward(
             tokens.reshape(-1) if reload_inputs else None,
             pos if reload_inputs else None,
@@ -459,6 +508,9 @@ class TTLfm2MoeForCausalLM:
             reload_sampling_params=bool(reload_sampling_params),
             reset_sampling_state=bool(reset_sampling_state),
             remap=slot_remap is not None,
+            penalized=bool(device and self.gen.penalized([r for r in range(B) if self.gen.pos_host[r] >= 0])),
+            histories=prompt_tokens is not None,
+            dur_s=round(time.perf_counter() - t_in, 6),
         )
         res = _DecodeOut("tokens" if device else "logits", self.model.state.tokens if device else out, B)
         if read_from_device:
@@ -481,11 +533,10 @@ class TTLfm2MoeForCausalLM:
             raise ValueError("compact host logits are not declared")
         if (tt_out.kind == "tokens") != bool(is_tokens):
             raise ValueError(f"decode output holds {tt_out.kind}, plugin expects {'tokens' if is_tokens else 'logits'}")
-        if is_tokens:
-            t = ttnn.to_torch(tt_out.tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
-            return t[0].reshape(-1)[: tt_out.rows].to(torch.int64).reshape(-1, 1)
-        t = ttnn.to_torch(tt_out.tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1))
-        return t[0, 0, : tt_out.rows, : self.model.vocab].float().unsqueeze(1)
+        if is_tokens:  # replicated: chip 0's copy
+            t = ttnn.to_torch(ttnn.get_device_tensors(tt_out.tensor)[0])
+            return t.reshape(-1)[: tt_out.rows].to(torch.int64).reshape(-1, 1)
+        return self.gen._logits_to_host(tt_out.tensor)[0, 0, : tt_out.rows].unsqueeze(1)
 
     # ------------------------------------------------------------------------------------------
     # request state / lifecycle
@@ -519,6 +570,11 @@ class TTLfm2MoeForCausalLM:
             sampling_replays=int(c["sampling_replays"]),
             prefill_replays=int(c["prefill_replays"]),
             eager_chunks=int(c["prefill_eager_chunks"]),
+            penalized_replays=int(c["penalized_sampling_replays"]),
+            penalty_resets=int(c["penalty_state_resets"]),
+            penalty_stale_replays=int(c["penalty_stale_replays"]),
+            seed_readbacks=int(c["seed_readbacks"]),
+            token_readbacks=int(c["token_readbacks"]),
             token_refreshes=int(c["token_refreshes"]),
             position_refreshes=int(c["position_refreshes"]),
             page_table_refreshes=int(c["page_table_refreshes"]),

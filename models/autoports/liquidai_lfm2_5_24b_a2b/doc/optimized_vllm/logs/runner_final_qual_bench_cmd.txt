@@ -1,0 +1,1 @@
+python -m readiness_check.run_vllm_server --stages qualitative\,benchmark --server-url http://localhost:8000 --model-dir models/autoports/liquidai_lfm2_5_24b_a2b --hf-model LiquidAI/LFM2.5-24B-A2B --max-num-seqs 32 --max-model-len 131072 --additional-benchmark-args --repetition-penalty\ 1.0

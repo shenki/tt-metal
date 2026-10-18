@@ -1,0 +1,792 @@
+[
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.87s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.85s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_top_n_at_cols_1_to_n",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.86s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_selected_token_ranks",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.86s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_at_rank0",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.86s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_max_num_logprobs_zero",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.85s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_dtypes",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.89s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_per_user_different_sampled",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.86s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_chunked_prefill.py::test_a_solo_split_prefill_recalls_its_needle",
+  "outcome": "passed",
+  "summary": "1 passed in 2.72s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 23,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_chunked_prefill.py::test_a_long_split_prefill_recalls_its_needle",
+  "outcome": "passed",
+  "summary": "1 passed in 3.44s",
+  "prefill_device": 0,
+  "prefill_host": 5,
+  "decode_device": 0,
+  "decode_host": 23,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_chunked_prefill.py::test_prefills_sharing_a_step_each_recall_their_own_needle",
+  "outcome": "passed",
+  "summary": "1 passed in 14.33s",
+  "prefill_device": 0,
+  "prefill_host": 24,
+  "decode_device": 0,
+  "decode_host": 87,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_config.py::test_get_tt_config_reads_additional_config",
+  "outcome": "passed",
+  "summary": "1 passed in 0.01s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_config.py::test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap",
+  "outcome": "passed",
+  "summary": "1 passed in 0.01s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_config.py::test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap",
+  "outcome": "passed",
+  "summary": "1 passed in 0.02s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_host_only_params.py::TestHostOnlyParameters::test_min_p",
+  "outcome": "passed",
+  "summary": "1 passed in 2.02s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_host_only_params.py::TestHostOnlyParameters::test_bad_words",
+  "outcome": "failed",
+  "summary": "1 failed in 17.97s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 100,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_host_only_params.py::TestHostOnlyParameters::test_logit_bias",
+  "outcome": "passed",
+  "summary": "1 passed in 1.83s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids",
+  "outcome": "passed",
+  "summary": "1 passed in 1.68s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_host_only_params.py::TestHostOnlyParameters::test_min_tokens",
+  "outcome": "passed",
+  "summary": "1 passed in 6.80s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 61,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[0-0]",
+  "outcome": "passed",
+  "summary": "1 passed in 1.40s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 9,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[0-0.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.58s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[0-1]",
+  "outcome": "passed",
+  "summary": "1 passed in 4.21s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[0-1.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 6.83s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[1-0]",
+  "outcome": "passed",
+  "summary": "1 passed in 1.21s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 9,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[1-0.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.59s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[1-1]",
+  "outcome": "passed",
+  "summary": "1 passed in 4.21s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[1-1.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 6.87s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[3-0]",
+  "outcome": "passed",
+  "summary": "1 passed in 1.21s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 9,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[3-0.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.60s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[3-1]",
+  "outcome": "passed",
+  "summary": "1 passed in 4.22s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[3-1.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 6.92s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[5-0]",
+  "outcome": "passed",
+  "summary": "1 passed in 1.22s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 9,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[5-0.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.63s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[5-1]",
+  "outcome": "passed",
+  "summary": "1 passed in 4.25s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[5-1.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 6.91s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[10-0]",
+  "outcome": "passed",
+  "summary": "1 passed in 1.22s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 9,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[10-0.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.59s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[10-1]",
+  "outcome": "passed",
+  "summary": "1 passed in 4.24s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_logprobs[10-1.5]",
+  "outcome": "passed",
+  "summary": "1 passed in 6.88s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab",
+  "outcome": "skipped",
+  "summary": "1 skipped in 0.08s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch",
+  "outcome": "failed",
+  "summary": "1 failed in 4.23s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding",
+  "outcome": "passed",
+  "summary": "1 passed in 9.03s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_different_seeds_produce_different_outputs",
+  "outcome": "passed",
+  "summary": "1 passed in 8.61s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches",
+  "outcome": "failed",
+  "summary": "1 failed in 13.36s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 29,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42]",
+  "outcome": "passed",
+  "summary": "1 passed in 9.63s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123]",
+  "outcome": "passed",
+  "summary": "1 passed in 9.73s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999]",
+  "outcome": "passed",
+  "summary": "1 passed in 9.71s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0]",
+  "outcome": "passed",
+  "summary": "1 passed in 9.56s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1]",
+  "outcome": "passed",
+  "summary": "1 passed in 21.63s",
+  "prefill_device": 0,
+  "prefill_host": 10,
+  "decode_device": 0,
+  "decode_host": 190,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0]",
+  "outcome": "passed",
+  "summary": "1 passed in 21.69s",
+  "prefill_device": 0,
+  "prefill_host": 10,
+  "decode_device": 0,
+  "decode_host": 190,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied",
+  "outcome": "passed",
+  "summary": "1 passed in 22.13s",
+  "prefill_device": 0,
+  "prefill_host": 10,
+  "decode_device": 0,
+  "decode_host": 190,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1]",
+  "outcome": "passed",
+  "summary": "1 passed, 1 warning in 8.67s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0]",
+  "outcome": "passed",
+  "summary": "1 passed, 1 warning in 8.67s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1]",
+  "outcome": "passed",
+  "summary": "1 passed, 1 warning in 4.90s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0]",
+  "outcome": "passed",
+  "summary": "1 passed, 1 warning in 4.94s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-1]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.25s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-0]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.26s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_noseed_varied",
+  "outcome": "passed",
+  "summary": "1 passed in 7.08s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_negative_seed_does_not_crash",
+  "outcome": "passed",
+  "summary": "1 passed in 2.31s",
+  "prefill_device": 0,
+  "prefill_host": 1,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[7]",
+  "outcome": "failed",
+  "summary": "1 failed in 2.05s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[10]",
+  "outcome": "passed",
+  "summary": "1 passed in 2.21s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[19]",
+  "outcome": "passed",
+  "summary": "1 passed in 3.13s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[32]",
+  "outcome": "passed",
+  "summary": "1 passed in 4.08s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37]",
+  "outcome": "passed",
+  "summary": "1 passed in 5.93s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches",
+  "outcome": "passed",
+  "summary": "1 passed in 11.25s",
+  "prefill_device": 0,
+  "prefill_host": 10,
+  "decode_device": 0,
+  "decode_host": 90,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15]",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 4.85s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19]",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 6.09s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32]",
+  "outcome": "passed",
+  "summary": "1 passed, 2 warnings in 8.06s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy",
+  "outcome": "passed",
+  "summary": "1 passed in 3.22s",
+  "prefill_device": 0,
+  "prefill_host": 3,
+  "decode_device": 0,
+  "decode_host": 19,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests",
+  "outcome": "passed",
+  "summary": "1 passed in 3.87s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 16,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_structured_output_dp1.py::test_dp1_reuses_slots_with_mixed_requests",
+  "outcome": "passed",
+  "summary": "1 passed in 6.69s",
+  "prefill_device": 0,
+  "prefill_host": 9,
+  "decode_device": 0,
+  "decode_host": 26,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tile_size.py::test_plugin_tile_matches_ttnn",
+  "outcome": "failed",
+  "summary": "1 error in 2.29s",
+  "prefill_device": 0,
+  "prefill_host": 0,
+  "decode_device": 0,
+  "decode_host": 0,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tt_penalties.py::TestRepetitionPenalty::test_different_repetition_penalties",
+  "outcome": "passed",
+  "summary": "1 passed in 1.45s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch",
+  "outcome": "failed",
+  "summary": "1 failed in 2.57s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 10,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_changes_output",
+  "outcome": "passed",
+  "summary": "1 passed in 40.69s",
+  "prefill_device": 0,
+  "prefill_host": 29,
+  "decode_device": 0,
+  "decode_host": 381,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_is_per_request",
+  "outcome": "passed",
+  "summary": "1 passed in 11.30s",
+  "prefill_device": 0,
+  "prefill_host": 4,
+  "decode_device": 0,
+  "decode_host": 58,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_changes_output",
+  "outcome": "passed",
+  "summary": "1 passed in 41.37s",
+  "prefill_device": 0,
+  "prefill_host": 32,
+  "decode_device": 0,
+  "decode_host": 384,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tt_penalties.py::TestFrequencyPenalty::test_different_frequency_penalties",
+  "outcome": "passed",
+  "summary": "1 passed in 2.56s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 20,
+  "decode_device_resident": 0
+ },
+ {
+  "test": "test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch",
+  "outcome": "passed",
+  "summary": "1 passed in 3.17s",
+  "prefill_device": 0,
+  "prefill_host": 2,
+  "decode_device": 0,
+  "decode_host": 15,
+  "decode_device_resident": 0
+ }
+]

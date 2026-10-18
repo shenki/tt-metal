@@ -57,7 +57,11 @@ def weight_signature(policy):
 
 BLOCK_SIZE = 64  # paged KV block (tokens)
 PAGE_TABLE_ALIGN = 8  # page-table rows are a multiple of 32 bytes
-PREFILL_CHUNK = 2048  # = Policy.moe_dispatch_max_rows; chunk starts are multiples of it (and of BLOCK_SIZE)
+PREFILL_CHUNK = 2048  # = Policy.moe_dispatch_max_rows; chunks hold at most this many rows
+# chunk starts are multiples of CHUNK_ALIGN (and of BLOCK_SIZE): the SDPA q / k chunk caps divide it, so every aligned
+# start selects the programs of the representative continuation start (prefill_chunk_device); serving snapshots the
+# ShortConv state on this grid (prefix caching: inner boundaries of a chunk are tapped, see tap_boundaries)
+CHUNK_ALIGN = 512
 PREFILL_BUCKETS = (32, 64, 128, 256, 512, 1024, 2048)  # physical padded chunk lengths
 # LM head decode DRAM-sharded config (cores, in0_block_w, readers per bank), doc/full_model/repro/head_sweep.py
 # (logs/head_sweep_bfp8*.log): with the 32256-column shard 175.6 us / call; the unpadded 32000-column shard (125 tiles
@@ -72,6 +76,15 @@ HEAD_COL_UNIT = 768
 SHARED_GENERATORS = {}
 # bump when this file changes how the embedding / final norm / LM head weights are built (weight-cache key)
 WEIGHT_LAYOUT_VERSION = 1
+
+
+def tap_boundaries(valid_len, padded_len):
+    """Inner ShortConv snapshot boundaries of a chunk (relative to its start, multiples of CHUNK_ALIGN strictly inside
+    its ``valid_len`` rows; the chunk end itself is the slot's state) as ``[(row r, boundary)]``.  Only buckets of at
+    least 2 x CHUNK_ALIGN rows carry tap inputs."""
+    if padded_len < 2 * CHUNK_ALIGN:
+        return []
+    return [(r, b) for r, b in enumerate(range(CHUNK_ALIGN, valid_len, CHUNK_ALIGN))]
 
 
 def prefill_bucket(n):
@@ -374,6 +387,33 @@ class Lfm2Model:
             ttnn.copy(s, dst)
             ttnn.deallocate(s)
 
+    def alloc_conv_taps(self):
+        """Serving prefix caching: per ShortConv layer two persistent tap buffers (row r = the state at inner boundary r
+        of the last tapped chunk) and the three row-broadcast selections; sets ``conv_taps`` so the prefill inputs of
+        the >= 2 x CHUNK_ALIGN buckets carry tap selections.  Call before ``alloc_prefill_inputs`` and any capture."""
+        if getattr(self, "conv_taps", False):
+            return
+        assert not getattr(self, "_pf_inputs", None), "alloc_conv_taps must precede alloc_prefill_inputs"
+        for l in self.conv_layers:
+            l.mixer.tap_buf = [ttnn.clone(s, memory_config=DRAM) for s in l.mixer.state]
+        self._tap_rows = []
+        for r in range(PREFILL_CHUNK // CHUNK_ALIGN - 1):
+            sel = torch.zeros(1, 1, self.batch, self.batch)
+            sel[0, 0, :, r] = 1.0
+            self._tap_rows.append(_replicated(self.mesh, sel, ttnn.bfloat16, ttnn.TILE_LAYOUT))
+        self.conv_taps = True
+
+    def conv_tap_buffers(self):
+        return [t for l in self.conv_layers for t in l.mixer.tap_buf]
+
+    def snapshot_taps_into(self, r, entry):
+        """Tap row ``r`` of every ShortConv layer (the state at the chunk's inner boundary r) into pool entry ``entry``
+        in the ``snapshot_conv_state`` layout (every row = that state; exact one-hot fp32-accumulated matmul)."""
+        for t, dst in zip(self.conv_tap_buffers(), self.snap_pool[entry]):
+            s = ttnn.matmul(self._tap_rows[r], t, compute_kernel_config=self.ckc_norm)
+            ttnn.copy(s, dst)
+            ttnn.deallocate(s)
+
     def restore_conv_state_from(self, slot, entry):
         self.restore_conv_state(slot, self.snap_pool[entry])
 
@@ -450,7 +490,7 @@ class Lfm2Model:
         ``slot``).  Every chunk-dependent quantity is data, so one program set serves all chunks of a bucket."""
         n = int(valid_len)
         S = prefill_bucket(n)
-        assert chunk_start % PREFILL_CHUNK == 0 and chunk_start + n <= self.max_seq_len, (chunk_start, n)
+        assert chunk_start % CHUNK_ALIGN == 0 and chunk_start + n <= self.max_seq_len, (chunk_start, n)
         ids = torch.full((1, S), self.args.pad_token_id, dtype=torch.int32)
         ids[0, :n] = torch.as_tensor(tokens, dtype=torch.int32).reshape(-1)[:n]
         pos = torch.arange(chunk_start, chunk_start + S, dtype=torch.int32).clamp(max=self.rope.max_seq_len - 1)
@@ -469,6 +509,12 @@ class Lfm2Model:
                 slot=slot, valid_len=n, padded_len=S, continuation=chunk_start > 0, windowed=False
             )
             h.update(carry0=c0, carry1=c1, tail0=t0, tail1=t1, keep=keep)
+            if getattr(self, "conv_taps", False) and S >= 2 * CHUNK_ALIGN:
+                tap0, tap1 = torch.zeros(1, 1, TILE, TILE + S), torch.zeros(1, 1, TILE, TILE + S)
+                for r, b in tap_boundaries(n, S):
+                    tap0[0, 0, r, TILE + b - 2] = 1.0
+                    tap1[0, 0, r, TILE + b - 1] = 1.0
+                h.update(tap0=tap0, tap1=tap1)
         sel = torch.zeros(1, 1, TILE, S)
         sel[0, 0, slot if out_row is None else out_row, n - 1] = 1.0
         h["sel"] = sel
@@ -513,18 +559,18 @@ class Lfm2Model:
     def prefill_chunk_device(self, S, *, continuation, out="last", accumulate_into=None):
         """Device-only prefill of one chunk of bucket ``S`` over the persistent inputs (eager or inside a trace).
 
-        ``continuation`` selects the program family (first chunk / chunk at a 2048-aligned start > 0); the actual start,
+        ``continuation`` selects the program family (first chunk / chunk at a CHUNK_ALIGN-aligned start > 0); the actual start,
         positions, blocks, slot and valid length are the runtime inputs.  ``out``: "none" (no head), "last" (last valid
         row's logits in row ``out_row`` of ``[1, 1, 32, 32256]``, other rows exactly 0; with ``accumulate_into`` they are
         added into that persistent tensor and nothing is returned) or "all" (``[1, 1, S, 32256]``, eager readiness path).
         """
         inp = self._pf_inputs[S]
-        # the representative start (0 / PREFILL_CHUNK) selects the same SDPA programs as any PREFILL_CHUNK-aligned start
-        # only while the decoder's q / k chunk caps are powers of two dividing PREFILL_CHUNK (prefill_sdpa_chunk and the
+        # the representative start (0 / PREFILL_CHUNK) selects the same SDPA programs as any CHUNK_ALIGN-aligned start
+        # only while the decoder's q / k chunk caps are powers of two dividing CHUNK_ALIGN (prefill_sdpa_chunk and the
         # k_chunk loop depend on the start only through divisibility); the runtime start is inp["cst"]
         for l in self.attn_layers:
             q_cap, k_cap = l.mixer.sdpa_chunk, l.policy.sdpa_prefill_k_chunk or l.mixer.sdpa_chunk
-            assert all(c & (c - 1) == 0 and PREFILL_CHUNK % c == 0 for c in (q_cap, k_cap)), (q_cap, k_cap)
+            assert all(c & (c - 1) == 0 and CHUNK_ALIGN % c == 0 for c in (q_cap, k_cap)), (q_cap, k_cap)
         e = ttnn.embedding(inp["ids"], self.embed, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, S, H]
         x = ttnn.reshape(e, (1, 1, S, self.H))
         attn_kw, cs = {}, []
@@ -532,7 +578,7 @@ class Lfm2Model:
             for table in (self.rope.cos_rm, self.rope.sin_rm):
                 t = ttnn.embedding(inp["pos"], table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, S, hd]
                 cs.append(ttnn.reshape(t, (1, 1, S, t.shape[-1])))
-            # chunk_start only selects the SDPA chunk program (first vs 2048-aligned continuation): runtime start in cst
+            # chunk_start only selects the SDPA chunk program (first vs CHUNK_ALIGN-aligned continuation): runtime start in cst
             attn_kw = dict(
                 rope=_ChunkRope(self.rope, *cs),
                 chunk_start=PREFILL_CHUNK if continuation else 0,
@@ -542,7 +588,16 @@ class Lfm2Model:
             )
         conv_in = None
         if self.conv_layers:
-            conv_in = ConvPrefillInputs(inp["carry0"], inp["carry1"], inp["tail0"], inp["tail1"], inp["keep"])
+            conv_in = ConvPrefillInputs(
+                inp["carry0"],
+                inp["carry1"],
+                inp["tail0"],
+                inp["tail1"],
+                inp["keep"],
+                None,
+                inp.get("tap0"),
+                inp.get("tap1"),
+            )
         for l in self.layers:
             y = l.prefill_forward(x, **attn_kw) if l.is_attention else l.prefill_forward(x, conv_inputs=conv_in)
             ttnn.deallocate(x)
@@ -569,7 +624,7 @@ class Lfm2Model:
 
     def prefill_chunk(self, tokens, *, chunk_start, valid_len, slot, page_table_row, out="last", out_row=None):
         """One eager prefill chunk for one sequence (see ``prefill_host_inputs`` / ``prefill_chunk_device``): chunks of
-        at most PREFILL_CHUNK rows at PREFILL_CHUNK-aligned starts, padded to ``prefill_bucket(n)`` with
+        at most PREFILL_CHUNK rows at CHUNK_ALIGN-aligned starts, padded to ``prefill_bucket(n)`` with
         ``pad_token_id``; padded rows write K/V only into this sequence's own blocks past its logical end or the scratch
         block, never feed valid rows, and are dropped.  Returns the device logits (``out`` "last" / "all") or None."""
         self.alloc_prefill_inputs()

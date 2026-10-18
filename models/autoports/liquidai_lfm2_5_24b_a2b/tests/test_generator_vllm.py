@@ -21,16 +21,17 @@ PT_W = 2048  # page-table width = max_model_len / block size
 N_BLOCKS = 4096  # small vLLM pool for the tests (block 0 = null block; the adapter adds its scratch blocks)
 
 
-def _sp(n, temperature=0.0, top_k=1, top_p=1.0, seed=None):
+def _sp(n, temperature=0.0, top_k=1, top_p=1.0, seed=None, presence=0.0, frequency=0.0, repetition=1.0):
     from vllm_tt_plugin.model_input import TTSamplingParams
 
+    per_row = lambda v: list(v) if isinstance(v, (list, tuple)) else [v] * n
     return TTSamplingParams(
-        temperature=[temperature] * n,
-        top_k=[top_k] * n,
+        temperature=per_row(temperature),
+        top_k=per_row(top_k),
         top_p=[top_p] * n,
-        presence_penalty=[0.0] * n,
-        frequency_penalty=[0.0] * n,
-        repetition_penalty=[1.0] * n,
+        presence_penalty=per_row(presence),
+        frequency_penalty=per_row(frequency),
+        repetition_penalty=per_row(repetition),
         seed=[seed] * n if not isinstance(seed, list) else seed,
         num_logprobs=[-2] * n,
         enable_log_probs=[False] * n,
@@ -115,7 +116,18 @@ def _prefill(ad, rows, sampling=None):
 
 
 def _decode(
-    ad, B, tokens, pos, table_rows, sp=None, remap=None, reload=True, page_only=False, params=False, reset=False
+    ad,
+    B,
+    tokens,
+    pos,
+    table_rows,
+    sp=None,
+    remap=None,
+    reload=True,
+    page_only=False,
+    params=False,
+    reset=False,
+    hist=None,
 ):
     tk = torch.zeros(B, 1, dtype=torch.int64)
     p = torch.full((B,), -1, dtype=torch.int64)
@@ -137,6 +149,7 @@ def _decode(
         reload_page_table=page_only,
         reload_sampling_params=params,
         reset_sampling_state=reset,
+        **({} if hist is None else dict(prompt_tokens=hist[0], output_tokens=hist[1])),
     )
     h, ev = ad.read_decode_output(out, async_read=True)
     for e in ev:
@@ -203,7 +216,8 @@ def test_chunked_continuation_and_slot_move(adapter):
 
 def test_prefix_hit_and_evicted_walkdown(adapter):
     """B shares 4096 tokens with A; a vLLM prefix hit starts B at 4096 (A's blocks) in a new slot: logits and ShortConv
-    rows == B prefilled from scratch.  With the 4096 snapshot evicted the adapter walks down to 2048 / 0."""
+    rows == B prefilled from scratch.  With the 4096 snapshot evicted the adapter walks down to the 3584 grid point (an
+    inner boundary of A's [2048, 4096) chunk, tapped) and recomputes 512 tokens."""
     ad = adapter
     a = _prompt(4100, 11)
     b = torch.cat([a[:4096], _prompt(70, 12)])
@@ -217,14 +231,57 @@ def test_prefix_hit_and_evicted_walkdown(adapter):
     hit = _prefill(ad, [(b, 4096, len(b), 11, blk_b)])
     assert torch.equal(hit, ref)
     assert all(torch.equal(x, y) for x, y in zip(_conv_rows(ad, 11), ref_rows))
-    # evict the 4096 entry: walk down to 2048
-    h4096 = ad.snaps.chain(b, 2)[1]
+    # evict the 4096 entry: walk down to 3584 (512 grid)
+    h4096 = ad.snaps.chain(b, 8)[7]
     e = ad.snaps.lru.pop(h4096)
     ad.snaps.free.append(e)
     rec0 = ad.snaps.stats["recompute_tokens"]
     hit2 = _prefill(ad, [(b, 4096, len(b), 12, blk_b)])
-    assert ad.snaps.stats["recompute_tokens"] - rec0 == 2048
-    assert torch.equal(hit2, ref)
+    assert ad.snaps.stats["recompute_tokens"] - rec0 == 512
+    # [3584, 4166) runs as one 1024-bucket chunk: bitwise equal to B prefilled with the same chunk split
+    split_blk = ad.blocks.take(66)
+    for lo, hi in ((0, 2048), (2048, 3584)):
+        _prefill(ad, [(b, lo, hi, 13, split_blk)])
+    split = _prefill(ad, [(b, 3584, len(b), 13, split_blk)])
+    assert torch.equal(hit2, split)
+    assert int(hit2[0, 0].argmax()) == int(ref[0, 0].argmax())
+
+
+def test_tap_snapshot_equals_chunk_end_state(adapter):
+    """The state tapped at an inner boundary of a 2048-row chunk (A: [2048, 4100) chunk, boundary 3584) is bitwise the
+    end state of a chunk of the same bucket that stops there ([2048, 3584), also bucket 2048)."""
+    ad = adapter
+    a = _prompt(4100, 81)
+    _prefill(ad, [(a, 0, 4100, 3, ad.blocks.take(65))])
+    e = ad.snaps.lookup(ad.snaps.chain(a, 7)[6])
+    assert e is not None, "no tap snapshot at 3584"
+    ad.model.restore_conv_state_from(4, e)
+    tapped = _conv_rows(ad, 4)
+    blk = ad.blocks.take(56)
+    _prefill(ad, [(a, 0, 2048, 5, blk)])
+    _prefill(ad, [(a, 2048, 3584, 5, blk)])
+    assert all(torch.equal(x, y) for x, y in zip(tapped, _conv_rows(ad, 5)))
+
+
+def test_prefix_hit_on_512_grid(adapter):
+    """B shares 2624 tokens with A (P = 2624: neither a chunk end nor on the 2048 grid): the adapter restores the 2560
+    tap snapshot and recomputes [2560, 2624) through a continuation chunk at a 512-aligned start; matches B from
+    scratch (top-1, PCC: different bucket split) and A's cached blocks are not written."""
+    ad = adapter
+    a = _prompt(4100, 91)
+    blk_a = ad.blocks.take(65)
+    _prefill(ad, [(a, 0, 4100, 6, blk_a)])
+    b = torch.cat([a[:2624], _prompt(100, 92)])
+    before = _kv_blocks(ad, blk_a[40:42])
+    rec0, res0 = ad.snaps.stats["recompute_tokens"], ad.snaps.stats["restores"]
+    hit = _prefill(ad, [(b, 2624, len(b), 7, blk_a[:41] + ad.blocks.take(2))])
+    assert ad.snaps.stats["recompute_tokens"] - rec0 == 64 and ad.snaps.stats["restores"] == res0 + 1
+    assert all(torch.equal(x, y) for x, y in zip(before, _kv_blocks(ad, blk_a[40:42])))
+    # no bitwise control exists here: the hit reuses A's K/V of [2048, 2560) from a 2048-row chunk, which a fresh B
+    # can only reproduce by computing past 2560 (exactness of the tap itself: test_tap_snapshot_equals_chunk_end_state)
+    ref = _prefill(ad, [(b, 0, len(b), 9, ad.blocks.take(43))])
+    assert int(hit[0, 0].argmax()) == int(ref[0, 0].argmax())
+    assert _pcc(hit[0, 0], ref[0, 0]) > 0.999
 
 
 def _kv_blocks(ad, ids):
@@ -273,14 +330,14 @@ def test_prefix_hit_does_not_mutate_shared_blocks(adapter):
 
 
 def test_prefix_hit_two_level_eviction(adapter):
-    """Both earlier snapshots evicted (4096 and 2048): a hit at P = 4160 walks down to Q = 0 and recomputes 65 blocks
+    """Every earlier snapshot evicted (512-grid points up to 4096): a hit at P = 4160 walks down to Q = 0 and recomputes 65 blocks
     into scratch (more than one chunk).  The owner's blocks stay bitwise unchanged; the hit matches a from-scratch
     prefill (top-1, PCC)."""
     ad = adapter
     a = _prompt(5000, 71)
     blk_a = ad.blocks.take(80)
     _prefill(ad, [(a, 0, 5000, 0, blk_a)], sampling=_sp(1))
-    for h in ad.snaps.chain(a, 2):
+    for h in ad.snaps.chain(a, 4160 // 512):  # every grid point <= 4160 (chunk ends and taps)
         e = ad.snaps.lru.pop(h, None)
         if e is not None:
             ad.snaps.free.append(e)
@@ -519,6 +576,208 @@ def test_seeded_sampling_reproducible_across_slots(adapter):
     alone = run(0, [])
     crowded = run(2, [0, 1])
     assert alone == crowded
+
+
+# ----------------------------------------------------------------------------------------------
+# device penalties and top_k up to 64 (stage 10)
+# ----------------------------------------------------------------------------------------------
+# strong enough to break the reduced 3-layer target's single-token loops within a few steps
+PEN = dict(presence=2.0, frequency=1.5, repetition=1.5)
+
+
+def _vllm_penalties(logits, prompt_mask, counts, presence, frequency, repetition):
+    """vLLM's ``apply_penalties`` (``vllm/model_executor/layers/utils.py``) in fp32: repetition scaling on the raw
+    logit sign for tokens in the prompt or the output, then ``- frequency * counts - presence * (counts > 0)``."""
+    x = logits.clone().float()
+    seen = (prompt_mask > 0) | (counts > 0)
+    scale = torch.where(x > 0, torch.full_like(x, 1.0 / repetition), torch.full_like(x, repetition))
+    x = torch.where(seen, x * scale, x)
+    return x - frequency * counts - presence * (counts > 0).float()
+
+
+def test_penalty_op_matches_vllm_order(adapter):
+    """Logit-level check of the device penalty op on a known state (row 0: prompt tokens, output tokens with repeats,
+    presence 0.5 / frequency 1.0 / repetition 1.3): equal to vLLM's order within bf16 rounding and measurably away from
+    the presence/frequency-first order on tokens that are in both the prompt and the output."""
+    ad = adapter
+    g = ad.gen
+    V = g.model.padded_vocab
+    torch.manual_seed(5)
+    logits = torch.randn(1, 1, 32, V) * 4
+    hot = torch.arange(1000, 1032)  # in prompt and output, positive logits: where the two orders differ most
+    logits[0, 0, 0, hot] = 6.0
+    prompt = torch.cat([hot, torch.arange(5000, 5100)])
+    output = torch.cat([hot.repeat(3), torch.arange(7000, 7050)])
+    pt = torch.full((32, len(prompt)), -1, dtype=torch.int32)
+    ot = torch.full((32, len(output)), -1, dtype=torch.int32)
+    pt[0], ot[0] = prompt.to(torch.int32), output.to(torch.int32)
+    g.set_penalty_params([0], presence=0.5, frequency=1.0, repetition=1.3)
+    g.reset_penalty_state(pt, ot)
+    dev_in = ttnn.from_torch(
+        logits,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=g.mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(g.mesh, dim=-1),
+    )
+    out = g._apply_penalties(dev_in)
+    got = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)], -1).float()[0, 0, 0]
+    for t in (dev_in, out):
+        ttnn.deallocate(t)
+    g.set_penalty_params([0])
+    g.reset_penalty_state(torch.full((32, 1), -1), torch.full((32, 1), -1))
+    x = logits[0, 0, 0].bfloat16().float()
+    prompt_mask = torch.zeros(V)
+    prompt_mask[prompt] = 1
+    counts = torch.bincount(output, minlength=V).float()
+    want = _vllm_penalties(x[None], prompt_mask[None], counts[None], 0.5, 1.0, 1.3)[0]
+    tt_order = x - 1.0 * counts - 0.5 * (counts > 0).float()
+    tt_order = torch.where(tt_order > 0, tt_order / 1.3, tt_order * 1.3) * (
+        (prompt_mask > 0) | (counts > 0)
+    ) + tt_order * ~((prompt_mask > 0) | (counts > 0))
+    tol = 0.02 * want.abs() + 0.02
+    assert ((got - want).abs() <= tol).all(), float((got - want).abs().max())
+    assert ((got[hot] - tt_order[hot]).abs() > 0.5).all()  # 4.615 - 3.5 vs (6 - 3.5) / 1.3: 1.12 vs 1.92
+
+
+def _hist(prompts, outputs):
+    """Plugin-shaped penalty histories: [32, L] int32, -1 padded, row = decode row."""
+    pt = torch.full((32, max(len(p) for p in prompts)), -1, dtype=torch.int32)
+    ot = torch.full((32, max(1, max(len(o) for o in outputs))), -1, dtype=torch.int32)
+    for r, (p, o) in enumerate(zip(prompts, outputs)):
+        pt[r, : len(p)] = torch.as_tensor(p, dtype=torch.int32)
+        ot[r, : len(o)] = torch.as_tensor(o, dtype=torch.int32)
+    return pt, ot
+
+
+def _device_run(ad, rows, steps, reset_at=(), temperature=0.0, top_k=1, seed=None):
+    """rows: [(prompt, penalties dict or None)] in slots 0..n-1, one device prefill + ``steps`` device decode steps
+    (resident token feedback; reload + params + reset with histories at step 0 and at ``reset_at``)."""
+    n = len(rows)
+    B = next(b for b in (1, 2, 4, 8) if b >= n)
+    pens = [r[1] or dict(presence=0.0, frequency=0.0, repetition=1.0) for r in rows]
+    sp = lambda m: _sp(  # noqa: E731
+        m,
+        temperature=temperature,
+        top_k=top_k,
+        seed=[seed] * m,
+        presence=[p["presence"] for p in pens] + [0.0] * (m - n),
+        frequency=[p["frequency"] for p in pens] + [0.0] * (m - n),
+        repetition=[p["repetition"] for p in pens] + [1.0] * (m - n),
+    )
+    blks = [ad.blocks.take(3) for _ in rows]
+    first = _prefill(ad, [(p, 0, len(p), s, blks[s]) for s, (p, _) in enumerate(rows)], sampling=sp(n))
+    seqs = [[int(first[s, 0])] for s in range(n)]
+    pos = [len(p) for p, _ in rows]
+    for i in range(steps):
+        boundary = i == 0 or i in reset_at
+        out = _decode(
+            ad,
+            B,
+            [q[-1] for q in seqs] + [0] * (B - n),
+            pos + [None] * (B - n),
+            blks + [[]] * (B - n),
+            sp=sp(B),
+            reload=boundary,
+            params=boundary,
+            reset=boundary,
+            hist=_hist([p for p, _ in rows], seqs) if boundary else None,
+        )
+        for s in range(n):
+            seqs[s].append(int(out[s, 0]))
+        pos = [q + 1 for q in pos]
+    return seqs, blks
+
+
+def _host_logits_along(ad, p, blk, seq):
+    """Host-path logits of request ``p`` teacher-forced along ``seq`` (model trace only, no sampler): [len(seq), V]."""
+    out = [_prefill(ad, [(p, 0, len(p), 0, blk)], sampling=None)[0, 0]]
+    for j, t in enumerate(seq[:-1]):
+        out.append(_decode(ad, 1, [t], [len(p) + j], [blk], sp=None)[0, 0])
+    return torch.stack(out).float()
+
+
+def test_device_penalties_match_reference(adapter):
+    """Greedy + presence / frequency / repetition on device: every step's token is the fp32 vLLM-order penalized argmax
+    of the host logits (``_vllm_penalties``), up to bf16 near-ties; the penalties change the output; a neutral row next
+    to it is bitwise the plain greedy stream; a mid-stream history rebuild leaves the stream unchanged."""
+    ad = adapter
+    p, q = _prompt(120, 777), _prompt(90, 778)
+    stale0 = int(ad.gen.counters["penalty_stale_replays"])
+    (pen_seq, plain_seq), _ = _device_run(ad, [(p, PEN), (q, None)], 24)
+    (pen_seq_reset, _), _ = _device_run(ad, [(p, PEN), (q, None)], 24, reset_at=(7, 15))
+    assert pen_seq_reset == pen_seq  # rebuild from histories == on-device counting
+    greedy_q = _greedy_run_single(ad, q, ad.blocks.take(3), 24, host=False)
+    assert plain_seq == greedy_q  # neutral rows are untouched by the penalized trace
+    greedy_p = _greedy_run_single(ad, p, ad.blocks.take(3), 24, host=False)
+    assert pen_seq != greedy_p  # the penalties act
+    logits = _host_logits_along(ad, p, ad.blocks.take(3), pen_seq)
+    V = logits.shape[-1]
+    prompt_mask = torch.zeros(1, V)
+    prompt_mask[0, p] = 1
+    counts = torch.zeros(1, V)
+    exact, worst = 0, 0.0
+    for j, t in enumerate(pen_seq):
+        ref = _vllm_penalties(
+            logits[j : j + 1], prompt_mask, counts, PEN["presence"], PEN["frequency"], PEN["repetition"]
+        )[0]
+        exact += int(ref.argmax()) == t
+        worst = max(worst, float(ref.max() - ref[t]))
+        counts[0, t] += 1
+    # bf16 penalty arithmetic: one bf16 ulp of the penalized logit's magnitude (plus one for the logit itself)
+    assert worst <= 2 * 2.0 ** (
+        torch.log2(logits.abs().max()).floor().item() - 7
+    ), f"device token {worst:.3f} below max"
+    assert exact >= len(pen_seq) - 3, f"only {exact}/{len(pen_seq)} steps match the fp32 reference argmax"
+    assert int(ad.gen.counters["penalty_stale_replays"]) == stale0
+
+
+@pytest.mark.skipif(
+    os.environ.get("LFM2_MAX_DEVICE_TOP_K", "32") == "32", reason="device top-k is capped at 32 (ttnn.sampling)"
+)
+@pytest.mark.parametrize("top_k", [50, 64])
+def test_device_topk_above_32(adapter, top_k):
+    """top_k 50 / 64 stays on device: every sampled token is inside the host top-k of its logits, and with a flat
+    distribution (temperature 200) tokens beyond rank 32 are drawn (the k > 32 candidates are really used)."""
+    ad = adapter
+    assert ad.model_capabilities["max_device_top_k"] == 64  # documents the ttnn.sampling 32 cap when forced to 64
+    p = _prompt(64, 4100 + top_k)
+    (seq,), (blk,) = _device_run(ad, [(p, None)], 30, temperature=200.0, top_k=top_k, seed=11)
+    logits = _host_logits_along(ad, p, ad.blocks.take(3), seq)
+    ranks = [int((lg > lg[t]).sum()) for lg, t in zip(logits, seq)]
+    assert max(ranks) < top_k, ranks
+    assert any(r >= 32 for r in ranks), ranks
+
+
+def test_seed_mirror_matches_device(adapter):
+    """The host seed mirror tracks the device RNG through prefill / decode / remap / host-logits steps, so request
+    boundaries never read seeds back (one verification read at the end)."""
+    ad = adapter
+    g = ad.gen
+    reads0 = int(g.counters["seed_readbacks"])
+    _device_run(ad, [(_prompt(50, 61), PEN), (_prompt(40, 62), None)], 5, temperature=0.7, top_k=20, seed=5)
+    _greedy_run_single(ad, _prompt(30, 63), ad.blocks.take(2), 3, host=True)
+    remap = list(range(32))
+    remap[0], remap[1] = 1, 0
+    a, b = _prompt(33, 64), _prompt(35, 65)
+    ba, bb = ad.blocks.take(2), ad.blocks.take(2)
+    first = _prefill(ad, [(a, 0, 33, 0, ba), (b, 0, 35, 1, bb)], sampling=_sp(2, temperature=0.9, top_k=10, seed=3))
+    _decode(
+        ad,
+        2,
+        [int(first[1, 0]), int(first[0, 0])],
+        [35, 33],
+        [bb, ba],
+        sp=_sp(2, temperature=0.9, top_k=10),
+        remap=remap,
+        params=True,
+        reset=True,
+        hist=_hist([b, a], [[int(first[1, 0])], [int(first[0, 0])]]),
+    )
+    assert int(g.counters["seed_readbacks"]) == reads0
+    dev = g._read_seeds() & 0xFFFFFFFF
+    assert torch.equal(dev, g.seed_host & 0xFFFFFFFF), (dev[:4], g.seed_host[:4])
 
 
 def test_no_recapture_after_warmup(adapter):
