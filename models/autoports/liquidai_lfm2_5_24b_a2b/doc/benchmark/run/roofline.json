@@ -1,0 +1,60 @@
+{
+ "32": {
+  "performance_sha256": "680da03d2890a849ffac9c62d6e200fad6844a8ad832b09c8c5919e246a0bbff",
+  "server_identity_sha256": "7859054ed8b2c251274f10fa6f4d782debca3c1f2ab81911e051199b9ca4d59e",
+  "requests": 96,
+  "input_tokens": 393216,
+  "output_tokens": 12288,
+  "prefill": {
+   "flops": 1790285042417664.0,
+   "seconds": 31.38723062633653,
+   "peak_flops_per_second": 1216512000000000.0,
+   "timing_scope": "full_phase_wall_time",
+   "timing_method": "adapter call records (CLOCK_MONOTONIC) in the measured window; each interval from a call's start to the next call's start charged to that call's phase (non-overlapping, includes host gaps, CCL, sampling and readback waits)",
+   "work_method": "useful prompt FLOPs from executed prefill rows x HF config (2 x active matmul params + causal attention + LM head once per request)",
+   "peak_source": "tt-perf-report ArchitectureSpec 'blackhole' (110 worker cores, 4096 FLOP/cycle/core at 1.35 GHz, HiFi2 = /2; DRAM 512 GB/s per chip) x 4 chips",
+   "evidence": "roofline-b32-evidence.json",
+   "evidence_sha256": "ffa9b018127b97443d532cbc3c114a413e0a58c97725c4aaa3c45970e038db2a"
+  },
+  "decode": {
+   "dram_bytes": 9766163375624.545,
+   "seconds": 12.568279806670034,
+   "peak_dram_bytes_per_second": 2048000000000.0,
+   "timing_scope": "full_phase_wall_time",
+   "timing_method": "adapter call records (CLOCK_MONOTONIC) in the measured window; each interval from a call's start to the next call's start charged to that call's phase (non-overlapping, includes host gaps, CCL, sampling and readback waits)",
+   "work_method": "per-step DRAM bytes at C1 stored dtypes over 4 chips: weights (experts: compact bucket x 4, else expected union of active rows' top-4), KV reads/writes at the logged positions, ShortConv state",
+   "peak_source": "tt-perf-report ArchitectureSpec 'blackhole' (110 worker cores, 4096 FLOP/cycle/core at 1.35 GHz, HiFi2 = /2; DRAM 512 GB/s per chip) x 4 chips",
+   "evidence": "roofline-b32-evidence.json",
+   "evidence_sha256": "ffa9b018127b97443d532cbc3c114a413e0a58c97725c4aaa3c45970e038db2a"
+  }
+ },
+ "1": {
+  "performance_sha256": "0ba891b2a51bd2dcae399a83876d1199543ec93d8874c01c9654fd8cc5f7c7ec",
+  "server_identity_sha256": "a7ac33501713afb5b6dc030fd84040032e5aff435f08d400916106bdeeef6623",
+  "requests": 8,
+  "input_tokens": 32768,
+  "output_tokens": 1024,
+  "prefill": {
+   "flops": 149190420201472.0,
+   "seconds": 2.358094891998917,
+   "peak_flops_per_second": 1216512000000000.0,
+   "timing_scope": "full_phase_wall_time",
+   "timing_method": "adapter call records (CLOCK_MONOTONIC) in the measured window; each interval from a call's start to the next call's start charged to that call's phase (non-overlapping, includes host gaps, CCL, sampling and readback waits)",
+   "work_method": "useful prompt FLOPs from executed prefill rows x HF config (2 x active matmul params + causal attention + LM head once per request)",
+   "peak_source": "tt-perf-report ArchitectureSpec 'blackhole' (110 worker cores, 4096 FLOP/cycle/core at 1.35 GHz, HiFi2 = /2; DRAM 512 GB/s per chip) x 4 chips",
+   "evidence": "roofline-b1-evidence.json",
+   "evidence_sha256": "11e09d5fd62e838e0800d0d4bc083121e6b788eee656f937e7c13176b65f8d28"
+  },
+  "decode": {
+   "dram_bytes": 2861691284480.0,
+   "seconds": 9.688685322005767,
+   "peak_dram_bytes_per_second": 2048000000000.0,
+   "timing_scope": "full_phase_wall_time",
+   "timing_method": "adapter call records (CLOCK_MONOTONIC) in the measured window; each interval from a call's start to the next call's start charged to that call's phase (non-overlapping, includes host gaps, CCL, sampling and readback waits)",
+   "work_method": "per-step DRAM bytes at C1 stored dtypes over 4 chips: weights (experts: compact bucket x 4, else expected union of active rows' top-4), KV reads/writes at the logged positions, ShortConv state",
+   "peak_source": "tt-perf-report ArchitectureSpec 'blackhole' (110 worker cores, 4096 FLOP/cycle/core at 1.35 GHz, HiFi2 = /2; DRAM 512 GB/s per chip) x 4 chips",
+   "evidence": "roofline-b1-evidence.json",
+   "evidence_sha256": "11e09d5fd62e838e0800d0d4bc083121e6b788eee656f937e7c13176b65f8d28"
+  }
+ }
+}

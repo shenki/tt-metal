@@ -1,0 +1,69 @@
+{
+  "model": "LiquidAI/LFM2.5-24B-A2B",
+  "base_url": "http://127.0.0.1:8000",
+  "manifest": "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/doc/benchmark/run/manifest.json",
+  "tasks": [
+    "gpqa_diamond_cot_zeroshot",
+    "ifeval"
+  ],
+  "accuracy_execution": "shared",
+  "vllm_cli": "/home/ttuser/liquid-LFM2.5-24B-A2B/bench_client/bin/vllm",
+  "budget_seconds": 10800,
+  "performance_server_command": [
+    "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/python_env/bin/python",
+    "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/tests/benchmark_server.py"
+  ],
+  "roofline_command": [
+    "/home/ttuser/liquid-LFM2.5-24B-A2B/bench_client/bin/python",
+    "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/tests/benchmark_roofline.py"
+  ],
+  "output_tokens": 128,
+  "generation": {
+    "gpqa_diamond_cot_zeroshot": {
+      "max_gen_toks": 32768,
+      "temperature": 0.6,
+      "do_sample": true,
+      "until": [],
+      "top_k": 32,
+      "repetition_penalty": 1.05
+    },
+    "ifeval": {
+      "max_gen_toks": 32768,
+      "temperature": 0.6,
+      "do_sample": true,
+      "until": [],
+      "top_k": 32,
+      "repetition_penalty": 1.05
+    }
+  },
+  "metrics": {
+    "gpqa_diamond_cot_zeroshot": [
+      "exact_match,flexible-extract",
+      "exact_match,strict-match"
+    ],
+    "ifeval": [
+      "prompt_level_strict_acc,none",
+      "inst_level_strict_acc,none",
+      "prompt_level_loose_acc,none",
+      "inst_level_loose_acc,none",
+      "ifeval_mean_four"
+    ]
+  },
+  "references": {
+    "gpqa_diamond_cot_zeroshot": {
+      "exact_match,flexible-extract": {
+        "score": 74.42,
+        "source_url": "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B",
+        "protocol_notes": "Model card / blog (https://www.liquid.ai/blog/lfm2-5-24b-a2b): vLLM, temperature 0.6, max output tokens 32768, thinking always on; harness, prompt, answer extraction, top_k/top_p and number of runs not stated; full 198-question Diamond set (this run: frozen 128-question subset, single sample, lm-eval 0.4.13 CoT zero-shot prompt)."
+      }
+    },
+    "ifeval": {
+      "prompt_level_strict_acc,none": {
+        "score": 96.75,
+        "source_url": "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B",
+        "protocol_notes": "Model card / blog: vLLM, temperature 0.6, max output tokens 32768; the source does not name the IFEval metric (compared here against prompt-level strict, the most common headline; all four upstream metrics are reported). Full 541 prompts at source; this run: frozen 256-prompt subset."
+      }
+    }
+  },
+  "source_manifest": "/home/ttuser/.claude/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.19/runtime/benchmark_stage/profiles/ci-v1-reasoning.json"
+}

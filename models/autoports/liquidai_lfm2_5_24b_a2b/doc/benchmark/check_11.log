@@ -1,0 +1,3 @@
+Benchmark evidence passed: models/autoports/liquidai_lfm2_5_24b_a2b/doc/benchmark
+Context contract OK for models/autoports/liquidai_lfm2_5_24b_a2b: target=131072, supported=131072 (full HF context).
+exit 0

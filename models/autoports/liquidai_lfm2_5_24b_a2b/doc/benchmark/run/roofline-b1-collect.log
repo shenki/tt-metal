@@ -1,0 +1,16 @@
+["/home/ttuser/liquid-LFM2.5-24B-A2B/bench_client/bin/python", "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/tests/benchmark_roofline.py", "--run-dir", "/home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal/models/autoports/liquidai_lfm2_5_24b_a2b/doc/benchmark/run", "--concurrency", "1", "--action", "collect"]
+{
+ "action": "collect",
+ "concurrency": 1,
+ "window_s": 12.069990918011172,
+ "seconds": {
+  "prefill": 2.358094891998917,
+  "decode": 9.688685322005767
+ },
+ "prefill_tokens": 32768,
+ "decode_steps": 1016,
+ "flops": 149190420201472.0,
+ "dram_bytes": 2861691284480.0,
+ "prefill_pct": 5.2007174826810845,
+ "decode_pct": 14.422082574261236
+}

@@ -1,0 +1,16 @@
+--- /home/ttuser/.claude/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.19/runtime/benchmark_stage/run.py	2026-10-15 14:31:03.982784728 +1030
++++ session_state/stage11/runtime_extended/benchmark_stage/run.py	2026-10-19 04:18:01.551827095 +1030
+@@ -68,9 +68,10 @@
+         config['source_manifest'] = str(source_manifest)
+         config['manifest'] = str(frozen_manifest)
+         (output / 'run_config.json').write_text(json.dumps(config, indent=2) + '\n')
+-    budget = min(float(config.get('budget_seconds', 3600)), 3600)
+-    if not 0 < budget <= 3600:
+-        raise ValueError('budget_seconds must be positive and at most 3600')
++    # STAGE-11 EXTENSION (user decision 2026-10-19: keep the published 32768-token output budget, extend the clock)
++    budget = min(float(config.get('budget_seconds', 3600)), 10800)
++    if not 0 < budget <= 10800:
++        raise ValueError('budget_seconds must be positive and at most 10800')
+     deadline = started + budget
+     summary = {'schema_version': 1, 'status': 'running', 'accuracy': {}, 'performance': {}}
+     def interrupted(signum, frame):

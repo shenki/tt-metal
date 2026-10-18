@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "status": "completed",
+  "accuracy": {
+    "gpqa_diamond_cot_zeroshot": {
+      "model": "LiquidAI/LFM2.5-24B-A2B",
+      "group": "gpqa_diamond_cot_zeroshot",
+      "subset_sha256": "3dd6b5fe3878c8138817180626bf5f551ae6a966d11777d3eac935db695fcc38",
+      "concurrency": 32,
+      "elapsed_seconds": 2305.246530532837,
+      "timing_scope": "shared accuracy pass",
+      "shared_groups": [
+        "gpqa_diamond_cot_zeroshot",
+        "ifeval"
+      ],
+      "request_timeout_seconds": 3600,
+      "expected_samples": 128,
+      "responses": 128,
+      "finish_reasons": {
+        "stop": 118,
+        "length": 10
+      },
+      "generation_overrides": {
+        "max_gen_toks": 32768,
+        "temperature": 0.6,
+        "do_sample": true,
+        "until": [],
+        "top_k": 32,
+        "repetition_penalty": 1.05
+      },
+      "empty_final_length_responses": 10,
+      "template": "native server chat template; structured messages exactly once",
+      "fewshot_as_multiturn": true,
+      "document_processing": {
+        "processor": "gpqa-cot-zeroshot-choice-shuffle-v1",
+        "seed": 0,
+        "map_cache": "recompute"
+      }
+    },
+    "ifeval": {
+      "model": "LiquidAI/LFM2.5-24B-A2B",
+      "group": "ifeval",
+      "subset_sha256": "3dd6b5fe3878c8138817180626bf5f551ae6a966d11777d3eac935db695fcc38",
+      "concurrency": 32,
+      "elapsed_seconds": 2305.246530532837,
+      "timing_scope": "shared accuracy pass",
+      "shared_groups": [
+        "gpqa_diamond_cot_zeroshot",
+        "ifeval"
+      ],
+      "request_timeout_seconds": 3600,
+      "expected_samples": 256,
+      "responses": 256,
+      "finish_reasons": {
+        "stop": 256
+      },
+      "generation_overrides": {
+        "max_gen_toks": 32768,
+        "temperature": 0.6,
+        "do_sample": true,
+        "until": [],
+        "top_k": 32,
+        "repetition_penalty": 1.05
+      },
+      "empty_final_length_responses": 0,
+      "template": "native server chat template; structured messages exactly once",
+      "fewshot_as_multiturn": true
+    }
+  },
+  "performance": {
+    "32": {
+      "concurrency": 32,
+      "requested_input_tokens": 4096,
+      "server_max_num_seqs": 32,
+      "server_identity_sha256": "7859054ed8b2c251274f10fa6f4d782debca3c1f2ab81911e051199b9ca4d59e",
+      "requested_output_tokens": 128,
+      "requests": 96,
+      "completed": 96,
+      "duration": 43.997708890994545,
+      "total_input_tokens": 393216,
+      "total_output_tokens": 12288,
+      "request_throughput": 2.1819317964451845,
+      "output_throughput": 279.2872699449836,
+      "total_token_throughput": 9216.47990818446,
+      "mean_ttft_ms": 2367.875926365741,
+      "median_ttft_ms": 643.5636374953901,
+      "p95_ttft_ms": 9806.57096199866,
+      "p99_ttft_ms": 11250.637909582292,
+      "mean_tpot_ms": 94.90265510621587,
+      "median_tpot_ms": 107.15564792906119,
+      "p95_tpot_ms": 110.83236864770718,
+      "p99_tpot_ms": 110.93878935011678,
+      "mean_itl_ms": 94.9026575167349,
+      "median_itl_ms": 26.981146496837027,
+      "p95_itl_ms": 215.68110045045614,
+      "p99_itl_ms": 224.73248300608248,
+      "mean_e2el_ms": 14420.513124855157,
+      "median_e2el_ms": 14433.857315510977,
+      "p95_e2el_ms": 23753.04449324176,
+      "p99_e2el_ms": 25290.17962953512
+    },
+    "1": {
+      "concurrency": 1,
+      "requested_input_tokens": 4096,
+      "server_max_num_seqs": 1,
+      "server_identity_sha256": "a7ac33501713afb5b6dc030fd84040032e5aff435f08d400916106bdeeef6623",
+      "requested_output_tokens": 128,
+      "requests": 8,
+      "completed": 8,
+      "duration": 12.064979828021023,
+      "total_input_tokens": 32768,
+      "total_output_tokens": 1024,
+      "request_throughput": 0.6630761189852907,
+      "output_throughput": 84.87374323011721,
+      "total_token_throughput": 2800.8335265938676,
+      "mean_ttft_ms": 321.51536300443695,
+      "median_ttft_ms": 320.7446205051383,
+      "p95_ttft_ms": 326.0985144559527,
+      "p99_ttft_ms": 327.4977452988969,
+      "mean_tpot_ms": 9.338868011761269,
+      "median_tpot_ms": 9.333169437013566,
+      "p95_tpot_ms": 9.363784894425565,
+      "p99_tpot_ms": 9.374884015073409,
+      "mean_itl_ms": 9.3388726377521,
+      "median_itl_ms": 9.372207990963943,
+      "p95_itl_ms": 9.458904241910204,
+      "p99_itl_ms": 9.569174007629044,
+      "mean_e2el_ms": 1507.5516004981182,
+      "median_e2el_ms": 1506.1319569940679,
+      "p95_e2el_ms": 1513.7900328962132,
+      "p99_e2el_ms": 1513.8083801744506
+    }
+  },
+  "accuracy_execution": "shared",
+  "elapsed_seconds": 2614.126652551
+}

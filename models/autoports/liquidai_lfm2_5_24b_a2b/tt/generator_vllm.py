@@ -184,7 +184,7 @@ class TTLfm2MoeForCausalLM:
 
         logger.info(
             f"TTLfm2MoeForCausalLM: precision {model.precision.config_id} ({model.precision_source}), "
-            f"layers {len(model.layers)}, max_model_len {max_seq_len}, optimizations {optimizations!r} (unused), "
+            f"layers {len(model.layers)}, max_model_len {max_seq_len}, optimizations {optimizations!r} (unused), module {__file__}, "
             f"trace allocation tracking {'ON' if TRACE_ALLOC_TRACKING else 'off'}"
         )
         return cls(Lfm2Generator(model))
@@ -510,6 +510,7 @@ class TTLfm2MoeForCausalLM:
             remap=slot_remap is not None,
             penalized=bool(device and self.gen.penalized([r for r in range(B) if self.gen.pos_host[r] >= 0])),
             histories=prompt_tokens is not None,
+            active_pos=[int(x) for x in self.gen.pos_host[:B].tolist() if x >= 0],  # next positions (roofline KV bytes)
             dur_s=round(time.perf_counter() - t_in, 6),
         )
         res = _DecodeOut("tokens" if device else "logits", self.model.state.tokens if device else out, B)
@@ -562,6 +563,7 @@ class TTLfm2MoeForCausalLM:
         c = self.gen.counters
         rec = dict(
             t=time.time(),
+            mono=time.monotonic(),  # CLOCK_MONOTONIC: the clock of the benchmark client's request start times
             kind=kind,
             step=self.steps,
             captures=int(c["trace_captures"]),
