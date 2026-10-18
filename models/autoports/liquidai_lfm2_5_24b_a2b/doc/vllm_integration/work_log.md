@@ -54,7 +54,7 @@ inactive, no Qwen container, no holder in `/proc/driver/tenstorrent/*/pids`, no 
 | 16:29-16:46 | final runner evidence (`runner_final3`): one runner-launched server + attached sampling (74 passed / 1 failed bad_words, same response 4 / 46 skipped), qualitative (greedy identical to rounds 1-2) and benchmark (128/128/1: TTFT 74.7 ms, TPOT 9.24 ms, **108.3 t/s/u**, 102.5 tok/s; 100/100/32: TTFT p50 1256.7 ms, TPOT 28.94 ms, 723.4 tok/s, 34.6 t/s/u); degenerate check clean, `09-vllm.check.sh` exit 0; cleanup clean | `logs/runner_final3_{serve,sampling,qual_bench}{_cmd.txt,.log}`, `readiness_vllm/*`, `logs/degenerate_check.log`, `logs/check_09.log` |
 | ~17:00 | README / work_log updated for round 2, the all_gather fix and final-code evidence | |
 | ~17:10 | stage review round 3 (Fable): **clean-pass**; non-blocking: upstream tt-metal issue for the all_gather race (repro `tests/test_ccl_ring_all_gather.py`), re-measure stage-7/8 accuracy in stage 10/11 | `session_state/stage9_review_rounds.md` (outside repo) |
-| TBD_COMMIT | local commits: tt-metal (stage-owned files incl. `all_gather_multicast_factory.cpp`) and vllm-tt-plugin (local patch); SHAs | |
+| ~17:20 | local commits (not pushed): tt-metal `autoport/lfm2_5_24b_a2b` **e3889dc0** (stage 9 adapter, generator/model hooks, tests, evidence, `all_gather_multicast_factory.cpp` fix; post-commit smoke: reduced adapter suite + all_gather op test 25 passed, `logs/postcommit_smoke.log.xz`); vllm-tt-plugin local branch `lfm2/text-only-mamba-align-chunked-mm` **108d500** on 6afed54 (text-only Mamba-align chunked-MM fix + 2 host tests) | |
 
 ## Commands (environment as recorded)
 
