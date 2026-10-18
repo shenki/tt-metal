@@ -50,6 +50,10 @@ inline uint32_t token_size_bytes(uint32_t emb, uint32_t fp8_scale_block) {
 // Read off the tensor rather than taken as a parameter — and off its SHAPE, not its page: a ROW_MAJOR dispatched
 // buffer pages by exactly one token, a TILE one does not.
 inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    // A ROW_MAJOR FP8_E4M3 buffer holds rows quantized before combine, scales included: a token is its bytes.
+    if (tensor_args.dispatched_buffer.dtype() == tt::tt_metal::DataType::FP8_E4M3) {
+        return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
+    }
     return token_size_bytes(
         static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]), args.fp8_scale_block);
 }
