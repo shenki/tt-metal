@@ -118,9 +118,12 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         auto bwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
             input_tensor, sender_device_coord, -1, axis_topology, axis);
 
-        // A load-balancing technique (alternating between two imbalanced routes) is used
-        // in even-sized rings.
-        const bool axis_load_balance = tt::tt_fabric::is_ring_or_torus(axis_topology) && (axis_size % 2 == 0);
+        // Route alternation (load balancing over the two imbalanced routes of an even ring) is disabled: the completion
+        // credit (done_sem) travels only the primary routes (sem_route_id), and fabric ordering covers only data on the
+        // same route, so packets sent over the alternate route could still be in flight when a receiver counts its
+        // barrier_wait_value credits and exits (on a 1x4 ring: the odd packets from the chip two hops away). The next
+        // op then read stale output tiles (LFM2.5-24B-A2B S=64..512 prefill all-reduce nondeterminism).
+        const bool axis_load_balance = false;
         if (axis == 1) {
             e_hops = fwd_hops;
             w_hops = bwd_hops;

@@ -1,0 +1,594 @@
+{
+ "wall_s": 8.390184147996479,
+ "requests": 20,
+ "completed_tokens": 702,
+ "completed_request_throughput_tok_s": 83.66920053448803,
+ "ttft_s": {
+  "p50": 0.14712971200060565,
+  "p95": 0.6938761540077394,
+  "p99": 0.6945555730053457,
+  "max": 0.6945555730053457
+ },
+ "itl_s": {
+  "p50": 0.010830901999725029,
+  "p95": 0.09724932799872477,
+  "p99": 0.23482872599561233,
+  "max": 0.34774101799121127
+ },
+ "decode_pauses_over_250ms": 4,
+ "determinism_greedy": {
+  "u129": true,
+  "u130": true,
+  "u131": true,
+  "d77": true,
+  "p4200": true
+ },
+ "traces_before_workload": {
+  "captures": [
+   20,
+   16
+  ],
+  "inventory": {
+   "t": 1792287006.311079,
+   "kind": "traces_ready",
+   "step": 0,
+   "captures": 20,
+   "prefill_captures": 16,
+   "model_replays": 0,
+   "sampling_replays": 0,
+   "prefill_replays": 0,
+   "eager_chunks": 0,
+   "token_refreshes": 0,
+   "position_refreshes": 0,
+   "page_table_refreshes": 0,
+   "snapshots": {
+    "stores": 0,
+    "store_hits": 0,
+    "restores": 0,
+    "in_slot": 0,
+    "recompute_tokens": 0,
+    "evictions": 0
+   },
+   "decode": {
+    "1": [
+     16,
+     17,
+     18
+    ],
+    "2": [
+     21,
+     22,
+     23
+    ],
+    "4": [
+     24,
+     25,
+     26
+    ],
+    "8": [
+     27,
+     28,
+     29
+    ],
+    "16": [
+     30,
+     31,
+     32
+    ],
+    "None": [
+     33,
+     34,
+     35
+    ]
+   },
+   "prefill": {
+    "(32, False, 'last')": 0,
+    "(32, True, 'last')": 1,
+    "(64, False, 'last')": 2,
+    "(64, True, 'last')": 3,
+    "(128, False, 'last')": 4,
+    "(128, True, 'last')": 5,
+    "(256, False, 'last')": 6,
+    "(256, True, 'last')": 7,
+    "(512, False, 'last')": 8,
+    "(512, True, 'last')": 9,
+    "(1024, False, 'last')": 10,
+    "(1024, True, 'last')": 11,
+    "(2048, False, 'last')": 12,
+    "(2048, True, 'last')": 13,
+    "(2048, False, 'none')": 14,
+    "(2048, True, 'none')": 15
+   },
+   "prefill_sampler": 19,
+   "counters": {
+    "prefill_trace_captures": 16,
+    "trace_captures": 20
+   },
+   "trace_bytes_per_bank": 71216128
+  }
+ },
+ "traces_after_workload": {
+  "captures": [
+   20,
+   16
+  ]
+ },
+ "recaptures": [
+  0,
+  0
+ ],
+ "prefill_chunk_rows": [
+  {
+   "start": 0,
+   "end": 129,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 130,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 131,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 77,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 300,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 1500,
+   "slot": 2,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 2048,
+   "slot": 3,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 2048,
+   "end": 3000,
+   "slot": 3,
+   "recompute_from": 2048,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 2048,
+   "slot": 4,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 2048,
+   "end": 4096,
+   "slot": 4,
+   "recompute_from": 2048,
+   "device_sampling": false
+  },
+  {
+   "start": 4096,
+   "end": 5000,
+   "slot": 4,
+   "recompute_from": 4096,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 131,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 129,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 64,
+   "end": 77,
+   "slot": 2,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 131,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 129,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 200,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 128,
+   "end": 129,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 0,
+   "end": 150,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 128,
+   "end": 130,
+   "slot": 1,
+   "recompute_from": 0,
+   "device_sampling": false
+  },
+  {
+   "start": 128,
+   "end": 130,
+   "slot": 0,
+   "recompute_from": 0,
+   "device_sampling": true
+  },
+  {
+   "start": 4096,
+   "end": 4200,
+   "slot": 0,
+   "recompute_from": 4096,
+   "device_sampling": true
+  },
+  {
+   "start": 4160,
+   "end": 4200,
+   "slot": 0,
+   "recompute_from": 4096,
+   "device_sampling": true
+  }
+ ],
+ "continuation_starts": [
+  64,
+  128,
+  2048,
+  4096,
+  4160
+ ],
+ "recompute_starts": [
+  0,
+  2048,
+  4096
+ ],
+ "decode_steps": 407,
+ "decode_modes": {
+  "rows=1 device reload reset": 10,
+  "rows=1 device resident": 231,
+  "rows=2 device reload reset remap": 4,
+  "rows=2 device resident": 66,
+  "rows=2 device page": 2,
+  "rows=4 device reload reset remap": 3,
+  "rows=4 device resident": 67,
+  "rows=4 device reload reset": 3,
+  "rows=8 device reload reset remap": 1,
+  "rows=8 device resident": 1,
+  "rows=8 device page": 1,
+  "rows=4 device page": 2,
+  "rows=2 host reload": 15,
+  "rows=1 device reload reset remap": 1
+ },
+ "snapshot_stats": {
+  "stores": 3,
+  "store_hits": 0,
+  "restores": 2,
+  "in_slot": 3,
+  "recompute_tokens": 1024,
+  "evictions": 0
+ },
+ "per_request": {
+  "u129": [
+   {
+    "phase": "unseen_129",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.11663274100283161,
+    "total": 0.3298040520021459,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_a",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.20501755399163812,
+    "total": 0.5187192699959269,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_b",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.09507036399736535,
+    "total": 0.330716456999653,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "u130": [
+   {
+    "phase": "unseen_130",
+    "text": " place Pediatricservices Deark\u00f6-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le",
+    "ttft": 0.0777432780014351,
+    "total": 0.2911225450079655,
+    "chunks": 24,
+    "prompt_len": 130,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "switch_back_greedy",
+    "text": " place Pediatricservices Deark\u00f6-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le",
+    "ttft": 0.1081388399907155,
+    "total": 0.3126921619987115,
+    "chunks": 24,
+    "prompt_len": 130,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "u131": [
+   {
+    "phase": "unseen_131",
+    "text": "\u30a2\u30eb\nTerm.1 originallyCheckluence-Af\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef",
+    "ttft": 0.07982956299383659,
+    "total": 0.2930017839971697,
+    "chunks": 24,
+    "prompt_len": 131,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_a",
+    "text": "\u30a2\u30eb\nTerm.1 originallyCheckluence-Af\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef",
+    "ttft": 0.2035272490029456,
+    "total": 0.5170557969977381,
+    "chunks": 24,
+    "prompt_len": 131,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_b",
+    "text": "\u30a2\u30eb\nTerm.1 originallyCheckluence-Af\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef\u7aef",
+    "ttft": 0.08923715999117121,
+    "total": 0.39574888299102895,
+    "chunks": 24,
+    "prompt_len": 131,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "d77": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "\u7684Princess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess",
+    "ttft": 0.07041652699990664,
+    "total": 2.267476645996794,
+    "chunks": 96,
+    "prompt_len": 77,
+    "max_tokens": 96,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "repeat_a",
+    "text": "\u7684Princess resultPrincess resultPrincess resultPrincess resultPrincess resultPrincess",
+    "ttft": 0.20434412499889731,
+    "total": 0.5180307010014076,
+    "chunks": 24,
+    "prompt_len": 77,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "c3000": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t",
+    "ttft": 0.3607385849900311,
+    "total": 1.3774977930006571,
+    "chunks": 32,
+    "prompt_len": 3000,
+    "max_tokens": 32,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "c5000": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "ance ambulance_medical_0.0.0.0.0.0.0.0.0.0.0.0.0",
+    "ttft": 0.6094115860032616,
+    "total": 1.0738243350060657,
+    "chunks": 32,
+    "prompt_len": 5000,
+    "max_tokens": 32,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "d300": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259\u7259",
+    "ttft": 0.1064481779903872,
+    "total": 2.396234679996269,
+    "chunks": 96,
+    "prompt_len": 300,
+    "max_tokens": 96,
+    "params": {
+     "temperature": 0.7,
+     "top_k": 20,
+     "top_p": 0.9
+    }
+   }
+  ],
+  "d1500": [
+   {
+    "phase": "chunked_during_decode",
+    "text": "S, 1.2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0",
+    "ttft": 0.18264775999705307,
+    "total": 2.279485069986549,
+    "chunks": 96,
+    "prompt_len": 1500,
+    "max_tokens": 96,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "g1": [
+   {
+    "phase": "switch_sampled",
+    "text": "\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3\u7684\u6838\u5fc3",
+    "ttft": 0.1551878600002965,
+    "total": 0.40224196600320283,
+    "chunks": 24,
+    "prompt_len": 129,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "s1": [
+   {
+    "phase": "switch_sampled",
+    "text": " jungle centre aff a a a a a a a a a a a a a a a a a a a a a",
+    "ttft": 0.14712971200060565,
+    "total": 0.4036881330102915,
+    "chunks": 24,
+    "prompt_len": 200,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.7,
+     "top_k": 20,
+     "top_p": 0.9
+    }
+   }
+  ],
+  "h1": [
+   {
+    "phase": "switch_host_logprobs",
+    "text": "big's latest latest latest latest latest latest latest latest latest latest latest latest latest latest",
+    "ttft": 0.6945555730053457,
+    "total": 1.9132134280080209,
+    "chunks": 15,
+    "prompt_len": 150,
+    "max_tokens": 16,
+    "params": {
+     "temperature": 0.0,
+     "logprobs": 3
+    }
+   }
+  ],
+  "g2": [
+   {
+    "phase": "switch_host_logprobs",
+    "text": " place Pediatricservices Deark\u00f6-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le-le",
+    "ttft": 0.6938761540077394,
+    "total": 1.991358469997067,
+    "chunks": 23,
+    "prompt_len": 130,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ],
+  "p4200": [
+   {
+    "phase": "prefix_hit",
+    "text": " 1.5mm 1.5mm 1.5mm 1.5mm 1.5",
+    "ttft": 0.10200171999167651,
+    "total": 0.31251454500306863,
+    "chunks": 24,
+    "prompt_len": 4200,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   },
+   {
+    "phase": "prefix_control",
+    "text": " 1.5mm 1.5mm 1.5mm 1.5mm 1.5",
+    "ttft": 0.10123452299740165,
+    "total": 0.31241540699556936,
+    "chunks": 24,
+    "prompt_len": 4200,
+    "max_tokens": 24,
+    "params": {
+     "temperature": 0.0
+    }
+   }
+  ]
+ },
+ "pass": true
+}

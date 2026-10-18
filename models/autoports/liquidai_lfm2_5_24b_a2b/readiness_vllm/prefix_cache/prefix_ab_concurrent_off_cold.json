@@ -1,0 +1,63 @@
+{
+ "label": "concurrent_off_cold",
+ "system_words": 6000,
+ "requests": [
+  {
+   "question": "Summarize in two sentences what the datatype sweep selected and why.",
+   "ttft_s": 1.439740146000986,
+   "total_s": 7.345780042000115,
+   "text": "We need to summarize in two sentences what the datatype sweep selected and why. The user is asking for a summary of the datatype sweep selection. The context is the LFM2.5-24B-A2B datatype sweep (stage 8) with selected config C1. The sweep selected C1 as the best config, which is a variant of the stage-7 policy with decode all-reduce payload in BFP8 (and other changes: `plan.ccl_dtype = \"bfp8\"`). The sweep chose C1 as the fastest config that passes the accuracy gate and selection rule v2 (b) and (c). Let's extract the key points:\n\n- The sweep selected config C1 (the \"selected\" config) as the best candidate",
+   "usage": {
+    "prompt_tokens": 12057,
+    "total_tokens": 12217,
+    "completion_tokens": 160
+   }
+  },
+  {
+   "question": "What is the decode throughput reported for the optimized full model?",
+   "ttft_s": 4.300684581001406,
+   "total_s": 4.981366298990906,
+   "text": "We need to answer: \"What is the decode throughput reported for the optimized full model?\" The user is asking about the decode throughput for the optimized full model. The context includes a lot of information about the LFM2.5-24",
+   "usage": {
+    "prompt_tokens": 12053,
+    "total_tokens": 12101,
+    "completion_tokens": 48
+   }
+  },
+  {
+   "question": "List three limitations mentioned in the reference material.",
+   "ttft_s": 1.4406404629989993,
+   "total_s": 4.878604879995692,
+   "text": "We need to answer: \"List three limitations mentioned in the reference material.\" The reference material is the session context. We need to identify three limitations. The text includes a \"Limitations\" section near the end:\n\n\"## Limitations\n",
+   "usage": {
+    "prompt_tokens": 12050,
+    "total_tokens": 12098,
+    "completion_tokens": 48
+   }
+  },
+  {
+   "question": "Which precision does the KV cache use?",
+   "ttft_s": 2.8448519359953934,
+   "total_s": 4.930460267001763,
+   "text": "We need to answer: \"Which precision does the KV cache use?\" The user is asking about the KV cache precision in the context of the LFM2.5-24B-A2B model sweep. The session state includes",
+   "usage": {
+    "prompt_tokens": 12050,
+    "total_tokens": 12098,
+    "completion_tokens": 48
+   }
+  }
+ ],
+ "identical_to": "concurrent_on_cold",
+ "identical": [
+  true,
+  true,
+  true,
+  true
+ ],
+ "first_char_divergence": [
+  null,
+  null,
+  null,
+  null
+ ]
+}

@@ -163,6 +163,7 @@ class Lfm2Generator(Generator):
         self.prefill_traces = {}  # (bucket, continuation, out) -> trace id
         self.sample_hist_traces = {}  # bucket -> sampling + history-append trace id
         self.traced_prefill = os.environ.get("LFM2_EAGER_PREFILL") != "1"
+        self.snapshot_entries = 0  # ShortConv snapshot pool size (serving: set before prepare)
 
     # ------------------------------------------------------------------------------------------
     # host -> device refresh helpers (request boundaries only)
@@ -193,11 +194,42 @@ class Lfm2Generator(Generator):
         if changed:
             self._push_sampling_params()
         if seed is not None:
-            # read-modify-write: other slots keep their device-advanced RNG state
-            s = ttnn.to_torch(ttnn.get_device_tensors(self.sampler.seeds_tt_tensor)[0]).to(torch.int64).reshape(-1)
-            self.counters["seed_readbacks"] += 1
-            s[rows] = torch.tensor([seed + r for r in rows], dtype=s.dtype)
-            self._copy(s.to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+            self.set_row_seeds(rows, [seed + r for r in rows])
+
+    def _read_seeds(self):
+        self.counters["seed_readbacks"] += 1
+        return ttnn.to_torch(ttnn.get_device_tensors(self.sampler.seeds_tt_tensor)[0]).to(torch.int64).reshape(-1)
+
+    def set_row_seeds(self, rows, values):
+        """Device RNG seeds of ``rows`` (uint32; the sampler re-seeds from them before every draw and ``plus_one``s them
+        after it).  Other rows keep their device-advanced state (read-modify-write unless every row is given)."""
+        rows = [int(r) for r in rows]
+        s = torch.zeros(self.B, dtype=torch.int64) if len(set(rows)) == self.B else self._read_seeds()
+        s[rows] = torch.as_tensor(values, dtype=torch.int64) & 0x7FFFFFFF  # 31 bits: exact through the int32 host copy
+        self._copy(s.to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+
+    def permute_slots(self, remap, *, resident_inputs=True, seeds=True):
+        """Slot ``i`` takes the state of old slot ``remap[i]`` (absolute permutation of all 32 slots, applied once):
+        ShortConv rows, per-row sampling params, and optionally the device RNG seeds and the resident decode inputs
+        (token, position / masks, page-table rows; skip when the caller reloads them on the same step)."""
+        remap = torch.as_tensor(remap, dtype=torch.long).reshape(-1)
+        if remap.numel() != self.B or sorted(remap.tolist()) != list(range(self.B)):
+            raise ValueError(f"slot_remap must be a permutation of {self.B} slots, got {remap.tolist()}")
+        if torch.equal(remap, torch.arange(self.B)):
+            return
+        if self.model.conv_layers:
+            self.model.permute_conv_slots(remap)
+        self.k_host, self.p_host, self.t_host = self.k_host[remap], self.p_host[remap], self.t_host[remap]
+        self._push_sampling_params()
+        if seeds:
+            self._copy(self._read_seeds()[remap].to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+        if resident_inputs:
+            self._write_tokens(self._read_tokens()[remap])
+            if self.page_host is not None:
+                self._copy(self.page_host[remap].contiguous(), self.model.state.page_table, "page_table_refreshes")
+                self.page_host = self.page_host[remap].contiguous()
+            self._refresh_positions(self.pos_host[remap])
+        self.counters["slot_permutations"] += 1
 
     def _refresh_table(self, table):
         """Copy the decode page table only when it differs from what is on device."""
@@ -287,6 +319,8 @@ class Lfm2Generator(Generator):
         m, st = self.model, self.model.state
         t0 = time.perf_counter()
         m.alloc_prefill_inputs()  # persistent per-bucket prefill inputs: before any capture
+        if self.snapshot_entries and m.conv_layers:
+            m.alloc_conv_snapshot_pool(self.snapshot_entries)  # lives across replays: before any capture
         conv_backup = [ttnn.clone(s) for s in m.conv_states()]
         backup = [(ttnn.clone(t), t) for t in (st.tokens, st.cur_pos, st.rope_pos, self.sampler.seeds_tt_tensor)]
         zero_row = torch.zeros(m.max_blocks, dtype=torch.int32)  # every block -> scratch block 0
@@ -322,6 +356,11 @@ class Lfm2Generator(Generator):
         m.restore_conv_state(scratch_slot, snap)
         for t in snap:
             ttnn.deallocate(t)
+        if m.conv_layers:
+            m.permute_conv_slots(list(range(self.B))[::-1])
+            if getattr(m, "snap_pool", None) is not None:
+                m.snapshot_conv_state_into(scratch_slot, 0)
+                m.restore_conv_state_from(scratch_slot, 0)
         for s, b in zip(m.conv_states(), conv_backup):
             ttnn.copy(b, s)
             ttnn.deallocate(b)
@@ -397,6 +436,8 @@ class Lfm2Generator(Generator):
         slots=None,
         start_pos=None,
         sample=True,
+        host_logits=False,
+        on_chunk=None,
         **kwargs,
     ):
         """Prefill ``B`` sequences (each in its own fixed slot) into the bound cache.
@@ -405,7 +446,10 @@ class Lfm2Generator(Generator):
         ``slots`` the ShortConv state rows (default 0..B-1), ``start_pos`` [B] absolute start of these tokens (default 0;
         a continuation must start at a multiple of 2048 and its slot must hold the state of the preceding tokens).
         Returns torch fp32 logits [B, L, 128000] (``return_all_logits``), else the first sampled token per sequence
-        [B] (device sampling, ``sample=True``), else last-position logits [B, 1, 128000] (compat)."""
+        [B] (device sampling, ``sample=True``), else last-position logits [B, 1, 128000] (compat).  ``host_logits``:
+        last-position logits [B, 1, 128000] from the traced path (the sampled-mode chunks accumulate into the persistent
+        prefill-logits buffer; one 8 MB readback instead of the sampler replay).  ``on_chunk(b, end)`` runs after each
+        chunk of sequence ``b`` (``end`` = absolute end position; serving snapshots ShortConv state there)."""
         if kv_cache is not None and kv_cache is not self.kv:
             raise ValueError("kv_cache is not the bound cache (bind_cache first)")
         if not self.prepared:
@@ -416,6 +460,10 @@ class Lfm2Generator(Generator):
         slots = list(range(B)) if slots is None else [int(s) for s in slots]
         starts = [0] * B if start_pos is None else [int(s) for s in torch.as_tensor(start_pos).reshape(-1)]
         all_logits, last = [], []
+        if host_logits:
+            if return_all_logits:
+                raise ValueError("host_logits and return_all_logits are exclusive")
+            sample = True  # same traced chunks (accumulate into pf_logits); read the buffer instead of sampling
         if not return_all_logits and sample:
             ttnn.fill(self.pf_logits, 0.0, output_tensor=self.pf_logits)
         for b in range(B):
@@ -442,6 +490,8 @@ class Lfm2Generator(Generator):
                     self.counters["full_logits_readbacks"] += 1
                     ttnn.deallocate(lg)
                 done += c
+                if on_chunk is not None:
+                    on_chunk(b, pos + done)
             self.counters["prefill_chunks"] += (n + PREFILL_CHUNK - 1) // PREFILL_CHUNK
             if return_all_logits:
                 all_logits.append(torch.cat(outs, dim=0))
@@ -453,6 +503,9 @@ class Lfm2Generator(Generator):
             return out
         if not sample:
             return torch.stack(last)
+        if host_logits:
+            self.counters["full_logits_readbacks"] += 1
+            return self.model.logits_to_host(self.pf_logits)[0, 0][slots].unsqueeze(1)
         if self.pf_sample_trace is None:
             self._capture(decode_bucket(slots))
         ttnn.execute_trace(self.mesh, self.pf_sample_trace, cq_id=0, blocking=False)
@@ -534,6 +587,7 @@ class Lfm2Generator(Generator):
         host_sampling=None,
         active_slots=None,
         record_history=False,
+        return_logits=False,
         **kwargs,
     ):
         """One decode step for all 32 fixed slots.
@@ -543,6 +597,9 @@ class Lfm2Generator(Generator):
         ``page_table`` [B, max_blocks] is copied only when it changed.  ``active_slots`` (static bucket b: only slots < b
         active) defaults to the smallest bucket covering the active slots.  Returns the sampled tokens [32] (torch,
         ``read_from_device``) or None; ``host_sampling`` (compat): host argmax of the full logits, returns [32] tokens.
+        ``return_logits`` (serving host-sampling steps): replay the model trace only (no sampler replay, the device RNG
+        does not advance) and return its vocab-sharded logits (device tensor; host [32, 128000] with
+        ``read_from_device``); the caller writes the next token / positions from the host.
         """
         if kv_cache is not None and kv_cache is not self.kv:
             raise ValueError("kv_cache is not the bound cache (bind_cache first)")
@@ -585,6 +642,13 @@ class Lfm2Generator(Generator):
             tid, logits, sid = self._trace(bucket)
             ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=False)
             self.counters["model_replays"] += 1
+            if return_logits:
+                self.pos_host[active] += 1
+                self.counters["logits_out_steps"] += 1
+                if read_from_device:
+                    self.counters["full_logits_readbacks"] += 1
+                    return self.model.logits_to_host(logits)[0, 0]
+                return logits
             if compat:
                 full = self.model.logits_to_host(logits)[0, 0]
                 self.counters["full_logits_readbacks"] += 1

@@ -288,5 +288,19 @@
     "persistent_allocation_changes": [
       "one extra persistent [32, 8192] BFP8 all_reduce_async L1 scratch pair per mesh (per payload dtype) for the BFP8 decode CCL payload"
     ]
+  },
+  "vllm_integration": {
+    "served_max_model_len": 131072,
+    "current_supported_context": 131072,
+    "capability_reduction": null,
+    "max_num_seqs": 32,
+    "kv_cache": "vLLM-owned pool: 65568 blocks x 64 tokens (get_max_tokens_all_users = 32 x 131072 + plugin headroom 32 blocks) + 2048 adapter-owned scratch blocks past the pool (one full page-table row: prefix-hit recompute target), BFP8, per chip [67616, 2, 64, 64] per attention layer (10 layers); block 0 = vLLM null block = model scratch block",
+    "prefix_caching": "enabled: vLLM block reuse for the 10 attention layers + model-owned ShortConv snapshot pool (128 x 1.9 MB per chip) keyed by token-history hash at 2048-token boundaries; a hit at P recomputes [Q, P) from the snapshot boundary Q into the adapter scratch blocks (vLLM's cached blocks are never written)",
+    "persistent_allocation_changes": [
+      "ShortConv snapshot pool 128 entries (~0.24 GiB per chip, allocated in prepare() before trace capture)",
+      "2048 extra KV blocks per attention layer (adapter scratch, ~35 MB per layer per chip, ~0.35 GiB per chip)"
+    ],
+    "non_aligned_prompts": "full model served prompt lengths 129/130/131/3000/4200/5000/~12050 (doc/vllm_integration/logs/mixed_shape_full_track3, readiness_vllm/prefix_cache) and 2049 on the reduced target; adapter tests 1..4100 non-aligned (doc/vllm_integration/logs/test_generator_vllm_full_r5.log)",
+    "evidence": "readiness_vllm/server.log (runner --stages serve, final code: logs/runner_final3_serve_cmd.txt), doc/vllm_integration/logs/check_09.log"
   }
 }

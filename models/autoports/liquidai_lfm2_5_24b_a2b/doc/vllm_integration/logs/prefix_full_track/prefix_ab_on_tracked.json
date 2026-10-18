@@ -1,0 +1,57 @@
+{
+ "label": "on_tracked",
+ "system_words": 6000,
+ "requests": [
+  {
+   "question": "Summarize in two sentences what the datatype sweep selected and why.",
+   "ttft_s": 1.428433673994732,
+   "total_s": 1.8664264760009246,
+   "text": "We need to summarize in two sentences what the datatype sweep selected and why. The user is asking: \"Summarize in two sentences what the datatype sweep selected and why.\"\n\nFrom the context, the datatype",
+   "usage": {
+    "prompt_tokens": 12052,
+    "total_tokens": 12100,
+    "completion_tokens": 48
+   }
+  },
+  {
+   "question": "What is the decode throughput reported for the optimized full model?",
+   "ttft_s": 0.2384520780033199,
+   "total_s": 0.6744326830084901,
+   "text": "We need to answer: \"What is the decode throughput reported for the optimized full model?\" The user is asking about the decode throughput for the optimized full model. The context includes a lot of information about the LFM2.5-24",
+   "usage": {
+    "prompt_tokens": 12048,
+    "total_tokens": 12096,
+    "completion_tokens": 48
+   }
+  },
+  {
+   "question": "List three limitations mentioned in the reference material.",
+   "ttft_s": 0.23551441699964926,
+   "total_s": 0.6725960339972517,
+   "text": "We need to list three limitations mentioned in the reference material. The user asks: \"List three limitations mentioned in the reference material.\"\n\nWe need to scan the provided text for limitations. The text includes a \"Limitations\" section near the",
+   "usage": {
+    "prompt_tokens": 12045,
+    "total_tokens": 12093,
+    "completion_tokens": 48
+   }
+  },
+  {
+   "question": "Which precision does the KV cache use?",
+   "ttft_s": 0.2217447809962323,
+   "total_s": 0.6593116709991591,
+   "text": "We need to answer: \"Which precision does the KV cache use?\" The user is asking about the KV cache precision in the context of the LFM2.5-24B-A2B model sweep. The provided context mentions",
+   "usage": {
+    "prompt_tokens": 12045,
+    "total_tokens": 12093,
+    "completion_tokens": 48
+   }
+  }
+ ],
+ "identical_to": "on",
+ "identical": [
+  true,
+  true,
+  true,
+  true
+ ]
+}

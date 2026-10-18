@@ -360,6 +360,35 @@ class Lfm2Model:
         for t in (col, keep, sel):
             ttnn.deallocate(t)
 
+    def alloc_conv_snapshot_pool(self, entries):
+        """Preallocate ``entries`` ShortConv snapshots (DRAM, one copy of every state tensor each; 1.9 MB per entry per
+        chip for 30 ShortConv layers).  Serving keeps conv state across prefill chunks / prefix-cache hits in this pool;
+        allocate before the first trace capture (it lives across replays)."""
+        if getattr(self, "snap_pool", None) is not None:
+            return
+        self.snap_pool = [[ttnn.clone(s, memory_config=DRAM) for s in self.conv_states()] for _ in range(entries)]
+
+    def snapshot_conv_state_into(self, slot, entry):
+        """``snapshot_conv_state(slot)`` written into pool entry ``entry`` (no persistent allocation)."""
+        for s, dst in zip(self.snapshot_conv_state(slot), self.snap_pool[entry]):
+            ttnn.copy(s, dst)
+            ttnn.deallocate(s)
+
+    def restore_conv_state_from(self, slot, entry):
+        self.restore_conv_state(slot, self.snap_pool[entry])
+
+    def permute_conv_slots(self, remap):
+        """Row ``i`` of every ShortConv state tensor takes old row ``remap[i]`` (absolute permutation of all 32 slots;
+        exact: one-hot fp32-accumulated matmul, applied whole so no row is read after it was overwritten)."""
+        perm = torch.zeros(1, 1, self.batch, self.batch)
+        perm[0, 0, torch.arange(self.batch), torch.as_tensor(remap, dtype=torch.long)] = 1.0
+        perm_tt = _replicated(self.mesh, perm, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        for s in self.conv_states():
+            new = ttnn.matmul(perm_tt, s, compute_kernel_config=self.ckc_norm)
+            ttnn.copy(new, s)
+            ttnn.deallocate(new)
+        ttnn.deallocate(perm_tt)
+
     # ------------------------------------------------------------------------------------------
     # decode (device only: warm-up and trace capture)
     # ------------------------------------------------------------------------------------------

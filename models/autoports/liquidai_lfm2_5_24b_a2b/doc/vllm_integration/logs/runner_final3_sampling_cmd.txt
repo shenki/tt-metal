@@ -1,0 +1,1 @@
+python -m readiness_check.run_vllm_server --stages sampling --server-url http://localhost:8000 --model-dir models/autoports/liquidai_lfm2_5_24b_a2b --hf-model LiquidAI/LFM2.5-24B-A2B --max-num-seqs 32 --sampling-profile full
