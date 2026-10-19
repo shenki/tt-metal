@@ -2498,6 +2498,7 @@ class _SdpaRecorder:
             call = {
                 "expanded": weight is not None,
                 "q_chunk": kwargs["program_config"].q_chunk_size,
+                "fidelity": kwargs["program_config"].matmul_math_fidelity,
                 "scale": kwargs["scale"],
                 "out": host(result[0]),
             }
@@ -2591,7 +2592,15 @@ def test_mla_expanded_k_matches_absorbed(
 
 
 def _check_expanded_k_vs_absorbed(
-    request, mesh_device, device_params, kwargs, use_metadata_tensor, tp_shard_kv, monkeypatch, q_chunk=None
+    request,
+    mesh_device,
+    device_params,
+    kwargs,
+    use_metadata_tensor,
+    tp_shard_kv,
+    monkeypatch,
+    q_chunk=None,
+    fidelity=None,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     outs, ref_pccs, sdpa_calls, valid_rows = {}, {}, {}, []
@@ -2615,6 +2624,8 @@ def _check_expanded_k_vs_absorbed(
         assert sdpa_calls[expanded] and all(c["expanded"] == expanded for c in sdpa_calls[expanded]), "mode not applied"
         if expanded and q_chunk is not None:
             assert all(c["q_chunk"] == q_chunk for c in sdpa_calls[True]), f"schedule not q{q_chunk}"
+        if fidelity is not None:
+            assert all(c["fidelity"] == fidelity for c in sdpa_calls[expanded]), f"SDPA fidelity not {fidelity}"
     # Per head, so a single head's expansion error is not diluted by the output projection. Real-token rows only:
     # padding queries of a partial chunk can attend past a tight cache's end, where the modes need not agree.
     assert len(sdpa_calls[False]) == len(sdpa_calls[True]) == len(valid_rows), "one SDPA call per forward"
@@ -2775,6 +2786,48 @@ def test_mla_expanded_k_schedules(
     monkeypatch.setattr(ttMLA, "_EXPANDED_K_SDPA_CHUNKS", {key: chunks for key in ttMLA._EXPANDED_K_SDPA_CHUNKS})
     _check_expanded_k_vs_absorbed(
         request, mesh_device, device_params, kwargs, use_metadata_tensor, False, monkeypatch, q_chunk=chunks[0]
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "kwargs,schedule",
+    [
+        pytest.param(dict(_CHUNKED_SCENARIOS)["rot-multislab"], None, id="c5k-pairs"),
+        pytest.param(dict(_CHUNKED_SCENARIOS)["rot-multislab"], "q160_k256", id="c5k-q160"),
+        pytest.param(dict(_EXPANDED_K_2K_SCENARIOS)["c2k-prefix"], None, id="c2k-pairs"),
+    ],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_k_lofi(request, mesh_device, device_params, kwargs, schedule, variant, monkeypatch):
+    """The SDPA matmul fidelity override (sdpa_matmul_fidelity=LoFi) also sets the K expansion's fidelity: the expanded
+    vs absorbed checks of test_mla_expanded_k_matches_absorbed, with LoFi QK / PV (both modes) and LoFi expansion, on
+    head pairs (4 x 2 expansion blocks) and on a forced one-core-per-Q-chunk schedule (2 x 4 blocks)."""
+    init = ttMLA.__init__
+
+    def init_lofi(self, *args, **init_kwargs):
+        init(self, *args, **init_kwargs)
+        self.sdpa_matmul_fidelity = ttnn.MathFidelity.LoFi
+
+    monkeypatch.setattr(ttMLA, "__init__", init_lofi)
+    chunks = _EXPANDED_K_FORCED_SCHEDULES[schedule] if schedule else None
+    if chunks:
+        monkeypatch.setattr(ttMLA, "_EXPANDED_K_SDPA_CHUNKS", {key: chunks for key in ttMLA._EXPANDED_K_SDPA_CHUNKS})
+    _check_expanded_k_vs_absorbed(
+        request,
+        mesh_device,
+        device_params,
+        kwargs,
+        False,
+        False,
+        monkeypatch,
+        q_chunk=chunks[0] if chunks else None,
+        fidelity=ttnn.MathFidelity.LoFi,
     )
 
 

@@ -153,17 +153,52 @@ Measured at the author's request, as input for optimisation, not as a gate.
     thread's 37–41 cycles is per tile matmul in the same zone, mostly waiting.
 - **Ceiling for a blocked expansion matmul**, at QK's rate: 18.2% × (1 − 32.1/39.5) = 3.4% of the SDPA kernel at K3
   512k (≈ 1.4 ms), 19.7% × (1 − 32.3/43.8) = 5.2% at K2.7 256k (≈ 0.75 ms).
-- **Larger levers**, since the expansion's MAC count is now the cost (18–20% of the SDPA kernel today, ≈ 15% at
-  QK's rate):
-  - The expansion matmul at LoFi only. LoFi for all SDPA matmuls cut the program by 17–18%. It would need E1/E2 again.
-  - Groups of 4 (each core expands 1 of 4 no-PE rows). This halves the per-core expansion again (≈ 7–10% of the
-    kernel at best), on schedules with 4 Q-chunk cores per head. But the kernel supports pairs only, the wider
-    exchange is not costed, and K3's 4-core schedule was 11.5% slower in Phase 1.
-- **Not covered:** the k_pe and peer-row copies, and stalls outside the zones. The kernel times here come from one
-  eager, profiled layer (42.48 / 14.46 ms); E3's 42.35 / 14.74 ms are realtime-profiler times from traced
-  steady-state runs.
-- **Reproduce:** `probes/` holds the probe patch, the harness (its header has the exact commands; one case per run)
-  and the analysis script (`expk_util_analyze.py profile_log_device.csv`).
+- **The expansion now runs at the SDPA's matmul fidelity, in full DST blocks (2026-10-18).**
+  - **What changed:**
+    - The reader stores W_UK latent-column-major in `cb_wuk` (tile (r, d) at d * own_rows + r).
+    - The expansion matmul is one SDPA no-MOP block (`sdpa_mm_init` / `sdpa_matmul_block_no_mop`) of rt K tiles × ct
+      W_UK rows per acquire, filling the DST (8 tiles with this model's bf16 dest): 4 × 2 under pairs, 2 × 4 without.
+    - The no-MOP helpers take `SDPA_MATMUL_FIDELITY`, so with `sdpa_matmul_fidelity=LoFi` the expansion now runs at
+      LoFi with the QK and PV. The MOP `matmul_tiles` it replaces always ran at the compute config's fidelity
+      (HiFi2), whatever the SDPA override.
+  - **LoFi gains (traced, expanded KV):**
+    - 5k chunks: −7.9% at KV 512k (K3 38.69 → 35.62 ms, K2.7 26.33 → 24.26 ms) and −4.8 to −6.6% at 55k.
+    - 2k chunks, which are gather-bound: −1.3 to −3.5%.
+  - **HiFi2:** unchanged within noise, bit-identical PCC.
+  - **LoFi accuracy** (full output PCC vs the CPU reference) moves by at most −0.00005:
+    - K3 5k 0.99819 → 0.99815, and K3 2k 0.99908 → 0.99904;
+    - K2.7 5k 0.99732 → 0.99727, and K2.7 2k 0.99826 → 0.99826;
+    - every cell is still at or above main (main: K3 5k 0.99796, K2.7 5k 0.99726).
+- **Blocking alone does not pay.**
+  - The same blocks at HiFi2 on the MOP path (`matmul_block`) left all 16 traced cells within noise.
+  - An earlier 2 × 2 block with a strided W_UK stream was ~3% faster per tile in the profile (39.5 → 38.2 cycles at
+    K3, 43.8 → 42.4 at K2.7). The no-MOP version of it was no faster (39.1 / 43.3).
+  - So the gap to QK's 32 cycles is not operand reloads. Its cause is untested: the in-tile transpose of W_UK, the
+    16-tile inner sums, or the scattered single-tile packs.
+- **The copies around the expansion are worth ≈ 1–1.5% end to end, not more.**
+  - Profiled split (K2.7 256k, single-tile kernel of 3ecd67c93b9): the k_pe and peer-row copies are 4.3% of the
+    kernel on the math thread. Waiting for the peer's rows is < 1% (unpack thread). That is 32 tile copies per K chunk
+    against 256 tile matmuls.
+  - Batching the copies per DST acquire brought that to 3.8% but left every traced cell within noise. Packing each
+    batch as one contiguous block broke correctness, and was dropped.
+  - **Ceiling:** a timing-only kernel with the copies and the second pack into `cb_own` removed, every CB handshake
+    kept. At KV 512k it ran 1.0–1.4% faster at 5k (K3 HiFi2 47.11 → 46.43 ms) and 0.6–2.6% at 2k; at 55k,
+    0.5–2.6%.
+  - **Not pursued: expanding in place** (no-PE rows packed beside k_pe in the latent chunk, the peer writing straight
+    into it):
+    - it could recover at most that ceiling;
+    - it would hold the latent slot through the QK, which cuts the reader's prefetch to one chunk;
+    - it needs a later pair credit, a new QK pop count and in1 offset, and an alias CB kept in lockstep on every
+      skip, padded and dummy path.
+- **Still open: groups of 4** (each core expands 1 of 4 no-PE rows, on schedules with 4 Q-chunk cores per head). The
+  kernel supports pairs only, the wider exchange is not costed, and K3's 4-core schedule was 11.5% slower in Phase 1.
+- **Not covered** by the zones above: stalls outside them. The kernel times here come from one eager, profiled layer
+  (42.48 / 14.46 ms); E3's 42.35 / 14.74 ms are realtime-profiler times from traced steady-state runs.
+- **Reproduce:** the probe patches apply to the kernel before the blocked expansion (3ecd67c93b9 and earlier). `probes/`
+  holds the probe patches (`expk_util_probe.patch` for the matmul and QK zones,
+  `expk_copy_probe.patch` for the copy and peer-wait zones), the harness (its header has the exact commands; one case
+  per run) and the analysis scripts (`expk_util_analyze.py`, `expk_copy_analyze.py`, each on
+  `profile_log_device.csv`).
 
 ## Next steps
 

@@ -1402,9 +1402,10 @@ void kernel_main() {
                     read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                         is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
                     if constexpr (k_expand) {
-                        // This Q chunk's head's W_UK, [128, 512] = 4 x 16 tiles, tile-row-major: same lifetime as Q
-                        // (compute pops both together).
-                        // Only this core's rows of W_UK: rows [rank * own_rows, (rank + 1) * own_rows) of its 4 x 16.
+                        // This Q chunk's head's W_UK, [128, 512] = 4 x 16 tiles: same lifetime as Q (compute pops both
+                        // together). Only this core's rows of W_UK: rows [rank * own_rows, (rank + 1) * own_rows) of
+                        // its 4 x 16, stored latent-column-major (tile (r, d) at d * own_rows + r) so the expansion's
+                        // matmul block reads a latent column's W_UK rows as adjacent tiles.
                         constexpr uint32_t wuk_tiles = kexp_own_rows * 16;
                         // The op validates [c_kv (512) | k_pe] latent K and [q_nope (128) | q_pe] Q with matching PE
                         // widths, so Q has exactly 4 tile rows more than the latent's PE part (compute's count).
@@ -1416,10 +1417,14 @@ void kernel_main() {
                             .page_size = wuk_tile_bytes,
                             .data_format = get_dataformat(cb_wuk)};
                         cb_reserve_back(cb_wuk, wuk_tiles);
-                        uint32_t wuk_write_ptr = get_write_ptr(cb_wuk);
+                        const uint32_t wuk_write_ptr = get_write_ptr(cb_wuk);
                         for (uint32_t t = 0; t < wuk_tiles; ++t) {
-                            noc_async_read_tile(nq * 64 + kexp_rank * wuk_tiles + t, wuk_gen, wuk_write_ptr);
-                            wuk_write_ptr += wuk_tile_bytes;
+                            const uint32_t r = t / 16;
+                            const uint32_t d = t % 16;
+                            noc_async_read_tile(
+                                nq * 64 + kexp_rank * wuk_tiles + t,
+                                wuk_gen,
+                                wuk_write_ptr + (d * kexp_own_rows + r) * wuk_tile_bytes);
                         }
                         noc_async_read_barrier();
                         cb_push_back(cb_wuk, wuk_tiles);

@@ -36,10 +36,11 @@ constexpr bool reduce_trigger_supported = false;
 constexpr bool reduce_trigger_supported = true;
 #endif
 
-// SDPA_MATMUL_FIDELITY overrides the fidelity of the QK^T and softmax @ V matmuls. A LoFi replay image is
-// specific to the matmul's shape, so each PV setup re-records it instead of reusing the last one whenever a LoFi
-// image can be live: a LoFi override, or a LoFi compute config, whose normalize_row records a LoFi image between
-// two PV setups. HiFi levels all record the same image, so HiFi over HiFi can reuse it.
+// SDPA_MATMUL_FIDELITY overrides the fidelity of the QK^T and softmax @ V matmuls, and of the expanded-K expansion
+// (sdpa_expand_k_chunk). A LoFi replay image is specific to the matmul's shape, so each PV setup re-records it instead
+// of reusing the last one whenever a LoFi image can be live: a LoFi override, or a LoFi compute config, whose
+// normalize_row records a LoFi image between two PV setups. HiFi levels all record the same image, so HiFi over HiFi
+// can reuse it.
 #ifdef SDPA_MATMUL_FIDELITY
 constexpr bool sdpa_matmul_fidelity_set = true;
 constexpr MathFidelity sdpa_matmul_fidelity = static_cast<MathFidelity>(SDPA_MATMUL_FIDELITY);
@@ -1398,10 +1399,10 @@ inline bool sdpa_packed_first_half_unmasked(
  *
  * cb_kt_in holds the latent [c_kv | k_pe] as plain tiles in K^T tile order (tile (d, kt) at d * Sk_chunk_t + kt; the
  * reader's transposed fetch reorders tiles, and the QK transposes in-tile through its in1-transpose flag). cb_wuk holds
- * W_UK of this core's head, [no-PE rows x latent cols] tile-row-major. The result keeps the same contract, so the QK
- * runs unchanged at DHt_qk: rows [0, nope_rows) are K_h no-PE tiles, c_kv @ W_UK^T (W_UK's tiles transposed in-tile by
- * the same matmul flag), and rows [nope_rows, DHt_qk) are the latent's k_pe tiles, copied. Pops cb_kt_in, pushes
- * cb_kexp.
+ * W_UK of this core's head, [no-PE rows x latent cols] latent-column-major (tile (r, d) at d * rows + r). The result
+ * keeps the same contract, so the QK runs unchanged at DHt_qk: rows [0, nope_rows) are K_h no-PE tiles,
+ * c_kv @ W_UK^T (W_UK's tiles transposed in-tile by the same matmul flag), and rows [nope_rows, DHt_qk) are the
+ * latent's k_pe tiles, copied. Pops cb_kt_in, pushes cb_kexp.
  *
  * Head groups (group > 1, expanded-K PLAN.md section 3.4): this core expands only its rank's nope_rows / group rows
  * (cb_wuk then holds only those rows of W_UK), also packs them into cb_own for the reader to send to the peer, and
@@ -1446,19 +1447,38 @@ static void sdpa_expand_k_chunk(const uint32_t rank = 0) {
     pack_reconfig_data_format(cb_normalized_out, cb_kexp);
     configure_single_tile_pack(cb_kexp);
 
-    // K_h no-PE tile (kt, r) = sum_d latent (kt, d) @ W_UK (r, d)^T, for this core's rows.
-    matmul_init(cb_kt_in, cb_wuk, /*transpose=*/1);
-    for (uint32_t r = 0; r < own_rows; ++r) {
-        for (uint32_t kt = 0; kt < Sk_chunk_t; ++kt) {
+    // K_h no-PE tile (kt, r) = sum_d latent (kt, d) @ W_UK (r, d)^T, for this core's rows, a DST block of rt K tiles x
+    // ct W_UK rows per acquire. Both operands' block tiles are adjacent: the latent's K tiles of a latent row, and
+    // W_UK's rows of a latent column. The SDPA's matmul helpers, so the expansion runs at the QK / PV fidelity
+    // (SDPA_MATMUL_FIDELITY) rather than the compute config's.
+    constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t ct = own_rows < dst_size ? own_rows : dst_size;
+    static_assert(own_rows % ct == 0, "W_UK rows must split into DST-sized blocks");
+    constexpr uint32_t rt = [] {
+        uint32_t rows = dst_size / ct;
+        while (Sk_chunk_t % rows != 0) {
+            --rows;
+        }
+        return rows;
+    }();
+    sdpa_mm_init(cb_kt_in, cb_wuk, /*transpose=*/true, ct, rt, /*kt_dim=*/1);
+    for (uint32_t r0 = 0; r0 < own_rows; r0 += ct) {
+        for (uint32_t kt0 = 0; kt0 < Sk_chunk_t; kt0 += rt) {
             tile_regs_acquire();
             for (uint32_t d = 0; d < latent_rows; ++d) {
-                matmul_tiles(cb_kt_in, cb_wuk, d * Sk_chunk_t + kt, r * latent_rows + d, 0);
+                sdpa_matmul_block_no_mop(
+                    cb_kt_in, cb_wuk, d * Sk_chunk_t + kt0, d * own_rows + r0, 0, true, ct, rt, /*kt_dim=*/1);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile<true>(0, cb_kexp, (own_start + r) * Sk_chunk_t + kt);
-            if constexpr (grouped) {
-                pack_tile<true>(0, cb_own, r * Sk_chunk_t + kt);
+            // DST holds the block row-major: K tile t, W_UK row c at t * ct + c. K^T rows are W_UK rows.
+            for (uint32_t t = 0; t < rt; ++t) {
+                for (uint32_t c = 0; c < ct; ++c) {
+                    pack_tile<true>(t * ct + c, cb_kexp, (own_start + r0 + c) * Sk_chunk_t + kt0 + t);
+                    if constexpr (grouped) {
+                        pack_tile<true>(t * ct + c, cb_own, (r0 + c) * Sk_chunk_t + kt0 + t);
+                    }
+                }
             }
             tile_regs_release();
         }
