@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""M3 prefill budget study, packed forwards: host wall time of one forward that packs B 2048-token
-segments (TtPrefillRuntime.prefill_segments), for a list of compositions sharing one layer set and B.
+"""Host wall time of one packed prefill forward, B 2048-token segments in one forward
+(TtPrefillRuntime.prefill_segments), for a list of compositions sharing one layer set and B.
 
 A composition is one forward's segment list:
     548864:2048,0:2048             two slots: a deep warm segment and a cold one
@@ -15,30 +15,30 @@ tokens, through packed forwards of that slot's consecutive chunks (padded with c
 slot). Fill depth is remembered per slot, so compositions sharing a history do not refill it. Token
 stream s at position p is token_ids[(p + 7919 * s) % len].
 
-BUDGET_REFERENCE=1 instead runs every segment alone through the ORIGINAL path (prefill_chunk,
+PACKED_REFERENCE=1 instead runs every segment alone through the ORIGINAL path (prefill_chunk,
 chunk_size = segment size, no segment_size) — the correctness reference for the packed path: dump both runs
-with BUDGET_DUMP_KV and compare the slots' K/V/index_k over the real positions (PCC per layer).
+with PACKED_DUMP_KV and compare the slots' K/V/index_k over the real positions (PCC per layer).
 
 Env:
-  BUDGET_LAYER_IDS   global layer indices                                                  [required]
-  BUDGET_COMPOS      ';'-separated NAME=composition                                        [required]
-  BUDGET_B           segments per forward (W = B * 2048); every composition has B segments
-                     [required unless BUDGET_REFERENCE=1]
-  BUDGET_CAPACITY    per-slot KV capacity in tokens, rounded up to a multiple of 2048 [default: max h + 2048]
-  BUDGET_WARMUP / BUDGET_ITERS   warm-up and timed forwards per composition; the first composition of a
+  PACKED_LAYER_IDS   global layer indices                                                  [required]
+  PACKED_COMPOS      ';'-separated NAME=composition                                        [required]
+  PACKED_B           segments per forward (W = B * 2048); every composition has B segments
+                     [required unless PACKED_REFERENCE=1]
+  PACKED_CAPACITY    per-slot KV capacity in tokens, rounded up to a multiple of 2048 [default: max h + 2048]
+  PACKED_WARMUP / PACKED_ITERS   warm-up and timed forwards per composition; the first composition of a
                      process gets at least 5 warm-ups                                       [2 / 5]
-  BUDGET_DUMP_KV     directory: after the last composition, save each slot's [k, v, index_k] (torch)
-  BUDGET_FILL        real | none. none skips the history fill and attends a ZEROED cache: shapes, gathers
+  PACKED_DUMP_KV     directory: after the last composition, save each slot's [k, v, index_k] (torch)
+  PACKED_FILL        real | none. none skips the history fill and attends a ZEROED cache: shapes, gathers
                      and op costs are the real ones but the block selection is degenerate (every score
                      equal), so the sparse attention runs faster than on real content. For profiling only:
                      a device-profiler capture of the real fill is tens of GB per 100k of depth  [default real]
-  BUDGET_REFERENCE   1 -> run each segment alone on the plain path (see above)            [default 0]
-  BUDGET_TOPK_DUMP   file: record the MSA top-k block ids of one extra forward of the last composition
-  BUDGET_PROFILE     1 -> zone-profile one extra forward of the last composition (run under
+  PACKED_REFERENCE   1 -> run each segment alone on the plain path (see above)            [default 0]
+  PACKED_TOPK_DUMP   file: record the MSA top-k block ids of one extra forward of the last composition
+  PACKED_PROFILE     1 -> zone-profile one extra forward of the last composition (run under
                      `python3 -m tracy -v -r -p`; zones as for profile_prefill.py, root `profiled_chunk`;
-                     the profiler is drained every BUDGET_PROFILE_READ_EVERY [16] forwards outside it) [default 0]
-  BUDGET_STAGES      1, 2 or 4 (sub-mesh (8/S, 4)); BUDGET_STAGE picks which one      [default 2 / 0]
-  BUDGET_TOKENS      metadata.json with token_ids, tiled to length                       [required]
+                     the profiler is drained every PACKED_PROFILE_READ_EVERY [16] forwards outside it) [default 0]
+  PACKED_STAGES      1, 2 or 4 (sub-mesh (8/S, 4)); PACKED_STAGE picks which one      [default 2 / 0]
+  PACKED_TOKENS      metadata.json with token_ids, tiled to length                       [required]
   M3_FABRIC, M3_CCL_TOPOLOGY, EXPERT_DTYPE, HF_MODEL, TT_CACHE_PATH as for profile_prefill.py.
 """
 
@@ -50,7 +50,7 @@ import sys
 import time
 
 # The zone flags are read when the model modules are imported (utils/profiler_utils), so they go first.
-PROFILE = os.getenv("BUDGET_PROFILE", "0") == "1"
+PROFILE = os.getenv("PACKED_PROFILE", "0") == "1"
 if PROFILE:
     os.environ.setdefault("M3_PROFILE_ZONES", "1")
     os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
@@ -123,30 +123,30 @@ def main():
     if soft != hard:
         resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
 
-    layer_ids = [int(x) for x in os.environ["BUDGET_LAYER_IDS"].split(",") if x.strip()]
+    layer_ids = [int(x) for x in os.environ["PACKED_LAYER_IDS"].split(",") if x.strip()]
     compos = []
-    for item in os.environ["BUDGET_COMPOS"].split(";"):
+    for item in os.environ["PACKED_COMPOS"].split(";"):
         if item.strip():
             name, spec = item.split("=", 1)
             compos.append((name.strip(), spec.strip(), parse_compo(spec.strip())))
-    reference = os.getenv("BUDGET_REFERENCE", "0") == "1"
-    B = 1 if reference else int(os.environ["BUDGET_B"])
+    reference = os.getenv("PACKED_REFERENCE", "0") == "1"
+    B = 1 if reference else int(os.environ["PACKED_B"])
     for name, spec, segs in compos:
-        assert reference or len(segs) == B, f"{name}: {len(segs)} segments, BUDGET_B={B}"
+        assert reference or len(segs) == B, f"{name}: {len(segs)} segments, PACKED_B={B}"
     n_slots = max(s for _, _, segs in compos for s, *_ in segs) + 1
     scratch = n_slots  # cold filler segments for fill forwards
     need = max(h + SEG for _, _, segs in compos for _, _, h, _ in segs)
-    capacity = max(int(os.getenv("BUDGET_CAPACITY", "0")), need)
+    capacity = max(int(os.getenv("PACKED_CAPACITY", "0")), need)
     capacity = -(-capacity // SEG) * SEG
-    warmup = int(os.getenv("BUDGET_WARMUP", "2"))
-    iters = int(os.getenv("BUDGET_ITERS", "5"))
-    stages = int(os.getenv("BUDGET_STAGES", "2"))
-    stage = int(os.getenv("BUDGET_STAGE", "0"))
-    dump = os.getenv("BUDGET_DUMP_KV")
-    fill_mode = os.getenv("BUDGET_FILL", "real")
+    warmup = int(os.getenv("PACKED_WARMUP", "2"))
+    iters = int(os.getenv("PACKED_ITERS", "5"))
+    stages = int(os.getenv("PACKED_STAGES", "2"))
+    stage = int(os.getenv("PACKED_STAGE", "0"))
+    dump = os.getenv("PACKED_DUMP_KV")
+    fill_mode = os.getenv("PACKED_FILL", "real")
     assert fill_mode in ("real", "none"), fill_mode
 
-    src = json.load(open(os.environ["BUDGET_TOKENS"]))["token_ids"]
+    src = json.load(open(os.environ["PACKED_TOKENS"]))["token_ids"]
     tok = lambda stream, p: [src[(p + STREAM_STRIDE * stream + i) % len(src)] for i in range(SEG)]
 
     emit(
@@ -188,9 +188,9 @@ def main():
             # Drain the device profiler during the un-profiled forwards (fills, warm-ups, timed iterations) so its
             # buffer never overflows before the profiled forward, which must fit in it whole (profile_prefill.py,
             # TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT). A drain is a multi-second mesh read, so not per layer:
-            # once per BUDGET_PROFILE_READ_EVERY forwards (a packed 2-layer forward is a few hundred ops).
+            # once per PACKED_PROFILE_READ_EVERY forwards (a packed 2-layer forward is a few hundred ops).
             state = {"in_profiled": False, "layers": 0}
-            read_every = int(os.getenv("BUDGET_PROFILE_READ_EVERY", "16")) * len(layer_ids)
+            read_every = int(os.getenv("PACKED_PROFILE_READ_EVERY", "16")) * len(layer_ids)
 
             def on_layer_complete(layer_idx):
                 if state["in_profiled"]:
@@ -261,7 +261,7 @@ def main():
             for slot, stream, h, n in segs:  # the composition wrote these positions: history now reaches them
                 depth[slot] = (stream, max(depth.get(slot, (stream, 0))[1], h + SEG))
 
-        topk_dump = os.getenv("BUDGET_TOPK_DUMP")
+        topk_dump = os.getenv("PACKED_TOPK_DUMP")
         if topk_dump:
             # One extra untimed forward of the last composition, recording every MSA call's top-k block ids.
             # Order: per layer, the cold segments in forward order then the warm ones when the overlap runs

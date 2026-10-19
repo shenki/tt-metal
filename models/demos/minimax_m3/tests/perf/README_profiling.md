@@ -185,7 +185,7 @@ So:
 | [utils/profiler_utils.py](../../utils/profiler_utils.py) | `zone(name, level)` context manager: emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1` and `level <= M3_PROFILE_LEVEL`. |
 | [profile_prefill.py](profile_prefill.py) | warmup → fill cache to N tokens (un-profiled) → run ONE chunk inside a `profiled_chunk` zone, with the profiler drained per layer BEFORE the chunk and flushed once after it. |
 | [parse_zone_perf.py](parse_zone_perf.py) | streams the ops CSV, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s and the device span per zone per device. Also a library. |
-| [budget_packed.py](budget_packed.py) | timing harness (no profiler by default): the host wall of one packed `prefill_segments` forward over a composition of segments. `BUDGET_PROFILE=1` zone-profiles one packed forward under `python3 -m tracy` the way profile_prefill.py does. |
+| [time_packed_prefill.py](time_packed_prefill.py) | timing harness (no profiler by default): the host wall of one packed `prefill_segments` forward over a composition of segments. `PACKED_PROFILE=1` zone-profiles one packed forward under `python3 -m tracy` the way profile_prefill.py does. |
 | [visualize_zones.py](visualize_zones.py) | the render step: text table + standalone HTML with the per-layer breakdown, per-chip spread, op-level detail and device-busy accounting. |
 
 Attribution: CSV rows are in host-enqueue order, so the ops between a zone's START and END signposts
