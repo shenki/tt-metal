@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline sfpi::vFloat template_reciprocal(const sfpi::vFloat a) {
+sfpi_inline sfpi::vFloat _erfinv_bw_reciprocal_(const sfpi::vFloat a) {
     // The SFPARECIP seed, then two Newton steps; a NaN step (a seed of 0 or inf) keeps the seed.
     sfpi::vFloat y = sfpi::approx_recip(a);
     sfpi::vFloat t = a * y - 2.0f;
@@ -54,7 +54,7 @@ inline void calculate_erfinv_bw_bf16() {
         v2 = v2 * v3 + 0.886218249797821f;
         vFloat x11 = dst_reg[d];
         vFloat v10 = vFloat(1.0f) - x11 * x11;
-        vFloat v9 = template_reciprocal(v10);
+        vFloat v9 = _erfinv_bw_reciprocal_(v10);
         vFloat v1 = v2 * v9;
         vFloat factor = vFloat(std::numeric_limits<float>::quiet_NaN());
         vFloat x = dst_reg[d];

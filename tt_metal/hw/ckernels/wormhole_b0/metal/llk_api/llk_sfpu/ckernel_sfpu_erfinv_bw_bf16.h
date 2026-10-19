@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline sfpi::vFloat template_reciprocal(const sfpi::vFloat in) {
+sfpi_inline sfpi::vFloat _erfinv_bw_reciprocal_(const sfpi::vFloat in) {
     // A quadratic seed on the mantissa in [1, 2), two Newton steps and the exponent's complement.
     sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
     sfpi::vFloat y = 1.4545459747314453f + 0.323232501745224f * negative_x;
@@ -57,7 +57,7 @@ inline void calculate_erfinv_bw_bf16() {
         v2 = v2 * v3 + 0.886218249797821f;
         vFloat x11 = dst_reg[d];
         vFloat v10 = vFloat(1.0f) - x11 * x11;
-        vFloat v9 = template_reciprocal(v10);
+        vFloat v9 = _erfinv_bw_reciprocal_(v10);
         vFloat v1 = v2 * v9;
         vFloat factor = vFloat(std::numeric_limits<float>::quiet_NaN());
         vFloat x = dst_reg[d];
