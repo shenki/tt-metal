@@ -117,6 +117,33 @@
   team: models
   budget_type: vllm
 
+# Temporary A/B for tenstorrent/tt-metal#60370, not for merging: Gemma4-12B at batch 32 with
+# synchronous scheduling and device sampling. sanjaradylov/gemma4-device-grammar samples structured
+# requests on device; its base commit samples them on host. 128 prompts keep the batch near 32.
+- name: "Gemma4-12B (host grammar baseline, batch=32)"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  structured-output: true
+  expect-grammar-sampling: host
+  server-timeout: 20
+  benchmark-timeout: 5
+  structured-output-timeout: 15
+  mesh-device: P150x4
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  server-default-top-k: 32
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --no-async-scheduling"
+  additional-structured-output-args: "--num-prompts 128"
+  extra-env: "VLLM_LOGGING_LEVEL=DEBUG"
+  multimodal: false
+  skus:
+    bh_quietbox_2:
+      timeout: 50
+      tier: 3
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  budget_type: vllm
+
 # tp=8 coverage on the 8-chip BH LoudBox (P150x8) — the flagship 12B config.
 # Serving knobs mirror the QB2 leg; the impl workflow additionally exports the
 # P150x8 target config (bounded sliding KV + batched prefill + eager chunks):
