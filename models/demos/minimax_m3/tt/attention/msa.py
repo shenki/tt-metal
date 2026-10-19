@@ -670,8 +670,10 @@ def msa_segments_pipelined(
     Schedule, with G(i) = segment i's K/V/index_k gather (gather sub-device, buffer set i % 2) and C(i) = its
     indexer -> top-k -> sparse_sdpa_msa (compute sub-device):
         G(0); for i: join(G(i), C(i-1)); C(i); G(i+1)
-    C(i) starts once its gather has landed and C(i-1) has released the other buffer set, while G(i+1) only
-    waits for G(i) (a program stalls on its own sub-device's predecessors). Only sub-device-confined ops run
+    The join before C(i) covers both sub-devices, so C(i) and G(i+1), enqueued after it, start only once G(i)
+    has landed and C(i-1) has released the buffer set G(i+1) overwrites; G(i+1) does not wait for C(i), which
+    is the overlap (a program stalls only on its own sub-device's predecessors). A join over one sub-device
+    would race that overwrite. Only sub-device-confined ops run
     inside the window: a layout change or an allocation that runs as a program would take the whole grid. The
     gather allocates nothing (persistent buffers, caller-owned semaphores), so a tensor freed on the compute
     side is only ever reused by a later compute-side program, after its reader. Eager only: the join is an
