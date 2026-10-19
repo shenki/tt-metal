@@ -31,6 +31,7 @@ VARIANTS = {
     "legacy": None,
     "standard": ttnn.SDPAPrecision.STANDARD,
     "balanced": ttnn.SDPAPrecision.BALANCED,
+    "accurate": ttnn.SDPAPrecision.ACCURATE,
     "fast": ttnn.SDPAPrecision.FAST,
 }
 # Exploration: the same recipe with the approximate exp (the harness passes exp_approx_mode=False).
