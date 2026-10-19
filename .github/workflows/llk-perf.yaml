@@ -31,6 +31,11 @@ on:
         required: false
         default: false
         type: boolean
+      tests-yaml:
+        description: "Test list (validation only)"
+        required: false
+        default: ./tests/pipeline_reorg/llk_perf_tests.yaml
+        type: string
       shadow-compile-runner:
         description: "Shadow compile on this CPU runner and compare (blank = off; the nightly uses xlarge-stable)"
         required: false
@@ -65,6 +70,7 @@ jobs:
       # Nightly runs always publish; manual runs use the checkbox.
       upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
       # Nightly runs shadow-compile on CPU runners (report-only, see #60901); manual runs opt in.
+      tests-yaml: ${{ inputs.tests-yaml || './tests/pipeline_reorg/llk_perf_tests.yaml' }}
       shadow-compile-runner: ${{ github.event_name == 'schedule' && 'tt-ubuntu-2204-xlarge-stable' || inputs.shadow-compile-runner }}
     secrets: inherit
 
