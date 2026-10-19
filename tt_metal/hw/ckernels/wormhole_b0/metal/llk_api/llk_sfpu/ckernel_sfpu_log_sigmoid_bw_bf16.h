@@ -28,12 +28,10 @@ inline void calculate_log_sigmoid_bw_bf16() {
             vFloat core_n = core_f - 12582912.0f;
             vInt core_k = as<vInt>(core_f) - 1262485504;
             vFloat core_r = core_t - core_n;
-            vFloat core = 0.05508868396282196f;
-            core = core * core_r + 0.24260404706001282f;
-            core = core * core_r + 0.6932762265205383f;
-            core = core * core_r + 0.9999289512634277f;
-            v_if(setsgn(core_t, 0) < 1.4901161193847656e-08f) { core = 1.0f; }
-            v_endif;
+            vFloat core = 0.05500870198011398f;
+            core = core * core_r + 0.24221089482307434f;
+            core = core * core_r + 0.693282961845398f;
+            core = core * core_r + 1.0f;
             vInt core_e = exexp(core, ExponentMode::Biased) + core_k + 64;
             v_if(core_e <= 0) { core = 0.0f; }
             v_else { core = setexp(core, core_e); }
@@ -57,6 +55,11 @@ inline void calculate_log_sigmoid_bw_bf16() {
         }
         v_endif;
         vFloat product = dst_reg[32 + d] * T;
+        v_if(setsgn(vFloat(dst_reg[32 + d]), 0) < 2.168404344971009e-19f) {
+            product = convert<vFloat16b>((dst_reg[32 + d] * 1.8446744073709552e+19f) * T, RoundMode::Nearest) *
+                      5.421010862427522e-20f;
+        }
+        v_endif;
         v_if(setsgn(x, 0) >= 69.31472778320312f && x >= 0.0f) {
             vFloat Ts = es * P;
             product = convert<vFloat16b>(dst_reg[32 + d] * Ts, RoundMode::Nearest) * 5.421010862427522e-20f;
