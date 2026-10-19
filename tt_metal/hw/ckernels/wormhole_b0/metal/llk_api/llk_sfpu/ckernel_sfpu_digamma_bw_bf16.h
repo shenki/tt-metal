@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline sfpi::vFloat template_reciprocal(const sfpi::vFloat in) {
+sfpi_inline sfpi::vFloat _digamma_bw_reciprocal_(const sfpi::vFloat in) {
     // A quadratic seed on the mantissa in [1, 2), two Newton steps and the exponent's complement.
     sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
     sfpi::vFloat y = 1.4545459747314453f + 0.323232501745224f * negative_x;
@@ -40,7 +40,7 @@ inline void calculate_digamma_bw_bf16() {
         }
         v_endif;
         vFloat v4 = v5 - v7;
-        vFloat v3 = template_reciprocal(v4);
+        vFloat v3 = _digamma_bw_reciprocal_(v4);
         vFloat x12 = dst_reg[d];
         vFloat v11 = sfpi::abs(x12);
         vFloat v13 = v11;
@@ -61,7 +61,7 @@ inline void calculate_digamma_bw_bf16() {
         vFloat x20 = dst_reg[d];
         vFloat v19 = sfpi::abs(x20);
         vFloat v18 = v19 * vFloat(0.25f) + vFloat(0.25f);
-        vFloat v17 = template_reciprocal(v18);
+        vFloat v17 = _digamma_bw_reciprocal_(v18);
         vFloat v16 = v17 * vFloat(0.25f);
         vFloat v15 = v16 * v16;
         vFloat v22 = -0.00333130219951272f;
@@ -74,7 +74,7 @@ inline void calculate_digamma_bw_bf16() {
         vFloat v1 = v2 - v14;
         vFloat x26 = dst_reg[d];
         vFloat v25 = sfpi::abs(x26);
-        vFloat v24 = template_reciprocal(v25);
+        vFloat v24 = _digamma_bw_reciprocal_(v25);
         vFloat v23 = v24 * v24 + v14;
         vFloat factor = v23;
         vFloat x = dst_reg[d];
