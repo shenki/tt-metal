@@ -1,6 +1,6 @@
 # Unrolled-V MLA on the TP-sharded KV cache: status
 
-Milestone: Phase 2 of [PLAN.md](PLAN.md) (serial TP latent gather, no overlap). Branch
+Milestone: Phases 2 and 3 of [PLAN.md](PLAN.md) (TP latent gather; prefetched during the previous layer's SDPA). Branch
 `pjosipovic/unrolled-v-tp-sharded-kv`. Last updated 2026-10-17. Everything was measured on one Blackhole Galaxy 8×4
 (TorusXY, high-power host).
 
@@ -21,6 +21,14 @@ Milestone: Phase 2 of [PLAN.md](PLAN.md) (serial TP latent gather, no overlap). 
 3. The gather reads the ND-sharded cache directly, with no reshape, using a new `outer_block_rows` option. Each
    160-row region is gathered as its own rank-interleaved block.
 4. On the trace-safe path, the slot and the live extent come from the metadata tensors.
+5. **Phase 3, prefetch (PLAN.md §4.4):** layer L's SDPA runs inside a sub-device manager. Alongside it, layer L+1's
+   gather of its earlier chunks runs on the 6 cores and the TP links the SDPA leaves idle, into a second buffer.
+   - Layer L+1 then writes only its own chunk into that buffer, locally.
+   - Prefetching happens only inside `tt_ccl.tp_latent_prefetch_chain()`, which the transformers open around their
+     layer loops.
+   - Layer 0, any forward outside a chain, and any forward whose host-side key doesn't match the prefetch gather
+     serially, as in step 1.
+   - `ttMLA(tp_latent_prefetch=False)` turns it off.
 
 ## Commits (on top of `7d302b0c4e1`)
 
@@ -38,9 +46,15 @@ Milestone: Phase 2 of [PLAN.md](PLAN.md) (serial TP latent gather, no overlap). 
 | `f99bc175844` | Round-7 review fixes: no-compile assertion in X4, extent-check wording, baseline replay output zeroed first | [log](reviews/f99bc175844.md) |
 | `d4d22260987` | Round-8 review fixes: X4 program-cache snapshot taken before capture; baseline patch compiles its zeroing before capture (passes with allocation tracking) | [log](reviews/d4d22260987.md) |
 | `239b41cb8e5` | Round-9 review fix: baseline patch hands the replay's output on after the timing branch | [log](reviews/239b41cb8e5.md) |
-| *(last)* | Review log for `239b41cb8e5` (docs only) | — |
+| `9944b580a13` | Review log for `239b41cb8e5` (docs only) | — |
+| `0ae65be53c7` | Phase 3: TP latent prefetch during the previous layer's SDPA; steady-state perf test; gates | [log](reviews/0ae65be53c7.md) |
+| `dbe70a53d08` | Phase 3 review fixes: prefetch chains (metadata safety), key dropped on layout change, kv_only stop layer, 3-layer X4, serial gate, manager release, docs | [log](reviews/dbe70a53d08.md) |
+| `a167a715772` | Expanded-K plan rev 2 (docs only, [../expanded_k/PLAN.md](../expanded_k/PLAN.md)) | plan reviews (rev 1) in its §8 |
+| `cb503a22535` | Phase 3 round-2 fixes: MTP stop layer, manager release on failure, stronger interruption checks, GLM host-test stub | [log](reviews/cb503a22535.md) |
+| `d340d30ec80` | Phase 3 round-3 fixes: both layout-change variants checked, finalizer before construction, host test of the transformer's stop layer | [log](reviews/d340d30ec80.md) |
+| *(last)* | Phase 3 round-4: device check of a chain's stop layer | **pending** (next step 1) |
 
-Each code commit (up to `239b41cb8e5`) was reviewed by Claude Code and Codex (gpt-6-astra). Every finding is fixed, or
+Each code commit up to `239b41cb8e5` was reviewed by Claude Code and Codex (gpt-6-astra). Every finding is fixed, or
 answered in its log.
 
 ## Exit criteria (PLAN.md §0)
@@ -50,12 +64,12 @@ answered in its log.
 | X1 | `tp_shard_kv` runs unrolled-V, no `ring_mla` | ✅ | `_chunked_attn` / `_tp_gather_latent` |
 | X2 | `tp_sharded` bitwise equal to `sp_only` | ✅ | `test_mla_chunked_prefill_tp_sharded_matches_sp_only`: 58 passed on functional + golden inputs, plus 44 passed on CPU-reference inputs, with the shared slot poisoned before every forward. Exclusions: no K2.7 golden trace exists (2 skips), and the deep/production scenarios have no CPU-reference case (CPU MLA too slow); both run on functional inputs. The PR's `test_mla_chunked_prefill` `tp_sharded` matrix: 140 passed, 0 failed. |
 | X3 | No regressions | ✅ | 53 Galaxy MLA tests pass on `sp_only`, with PCCs identical to before the merge. K3 KDA carry (`kimi_k3/test_chunked_prefill.py`): 4/4. |
-| X4 | Captured multi-layer, multi-user trace | ✅ | `test_mla_tp_sharded_trace_replay_multi_layer` (K2.7, K3): 2 layers (each on its own cache slot), 2 users, one capture replayed over 7 steps with user and prefix changed in place (long → short → long, rotated starts on a chip boundary), slot poisoned before every replay. Traced replay == `tp_sharded` eager == `sp_only` eager, bitwise, for both the outputs and the un-striped caches, with every (user, layer) slot written. Layouts alternate: the capture stays alive through the `sp_only` pass, then eager `tp_sharded` forwards and a second replay of the same capture must still match. Every program is compiled before the capture. Rows past user 1's extent are written only in user 0's slots, which catches a transposed slot mapping. No program compiles while the trace is alive (asserted); with `TT_METAL_TRACE_ALLOC_TRACKING=1` no allocation made while it is alive is live at a replay (passes). Mid-chip rotated starts are covered by the single-layer X2 scenarios. The PR's 10-layer K2.7 transformer test passes `tp_sharded` traced and untraced. |
-| X5 | Traced perf gate | ✅ | Two runs of the current method, 4/4 points each (below). Gates are the worst measured sample plus about 1 pp of measured noise, replacing the pre-measurement estimates. |
-| X6 | DRAM saving | ✅ | `test_mla_tp_sharded_dram_saving`, measured per chip at exact capacities (see below) |
+| X4 | Captured multi-layer, multi-user trace | ✅ | `test_mla_tp_sharded_trace_replay_multi_layer` (K2.7, K3): 3 layers (each on its own cache slot), 2 users, one capture replayed over 7 steps with user and prefix changed in place (long → short → long, rotated starts on a chip boundary), slot poisoned before every replay. Traced replay == `tp_sharded` eager == `sp_only` eager, bitwise, for both the outputs and the un-striped caches, with every (user, layer) slot written. Layouts alternate: the capture stays alive through the `sp_only` pass, then eager `tp_sharded` forwards and a second replay of the same capture must still match. Every program is compiled before the capture. Rows past user 1's extent are written only in user 0's slots, which catches a transposed slot mapping. No program compiles while the trace is alive (asserted); with `TT_METAL_TRACE_ALLOC_TRACKING=1` no allocation made while it is alive is live at a replay (passes). Mid-chip rotated starts are covered by the single-layer X2 scenarios. The PR's 10-layer K2.7 transformer test passes `tp_sharded` traced and untraced (Phase 2; not re-run with the prefetch, which needs the model weights). **Phase 3:** 3 layers; each but the last prefetches the next layer's latent during its SDPA (layer 2 reuses layer 0's buffer), so the capture is segmented (`SubDeviceTraceController`); the test passes for K2.7 and K3 with allocation tracking (the outputs, allocated in the last segment, are acknowledged). `test_mla_tp_latent_prefetch_matches_sp_only` (K2.7, K3 × scalar, metadata; 3 layers, 2 users, chunk-aligned / chip-boundary / mid-chip starts, partial chunks): prefetch == serial == `sp_only` bitwise, outputs and caches, and layers 1–2 consumed their prefetch on every step; no prefetch is consumed across separate chains or a `set_tp_shard_kv` layout change. |
+| X5 | Traced perf gate | ✅ | Steady-state layer with the prefetch, two runs, 4/4 points each (below). Gates are the worst measured sample plus about 1 pp of measured noise: +1.2 / +1.1 / +2.4 / +1.3%. Phase 3's ≤ +0.5% holds at K3 50k, K3 512k and K2.7 256k. K2.7 50k stays at +1.18% mean (serial +1.71% mean); see next step 2. The serial path keeps Phase 2's gates. |
+| X6 | DRAM saving | ✅ | `test_mla_tp_sharded_dram_saving`, measured per chip at exact capacities, net of both TP latent buffers: 0.645 GB (K3 512k), 0.886 GB (K2.7 256k) per user slot |
 | X7 | Op tests | ✅ | 18 new outer-block, width-gather and validation tests pass. Other failures in `test_high_bw_all_gather.py` on this Galaxy (3 bandwidth floors, 4 fabric-init errors) happen identically on main. |
-| X8 | Defaults and CI | ◐ | `sp_only` K3 50k is unchanged on the realtime profiler (7.654 / 7.660 ms vs 7.656 ms before). The criterion asks for a traced before/after, which was not measured: only the branch's traced `sp_only` (table below). **CI legs not run** (next step 1, deliberately out of this milestone). |
-| X9 | Two reviews per commit | ✅ | Every code commit reviewed by both; the last round (`239b41cb8e5`) had no blocker or major. The final commit only adds that review's log |
+| X8 | Defaults and CI | ◐ | `sp_only` K3 50k is unchanged on the realtime profiler (7.654 / 7.660 ms vs 7.656 ms before). The criterion asks for a traced before/after, which was not measured: only the branch's traced `sp_only` (table below). **CI legs not run** (next step 4, deliberately out of this milestone). |
+| X9 | Two reviews per commit | ◐ | Every Phase 2 commit reviewed by both (last round `239b41cb8e5`: no blocker or major). The Phase 3 commit is pending review (next step 1) |
 
 ### Performance (X5)
 
@@ -63,7 +77,7 @@ All numbers are **traced replays** of one 5k-chunk MLA forward on the same Galax
 the median of 5 replays 2 s apart (the middle three must agree within 2%). Main's `ring_mla` was timed the same way in
 a main worktree (merge-base `a7a3bc8f603`).
 
-Absolute times from run 1:
+Phase 2 (serial gather, single-layer forward), absolute times from run 1:
 
 | Point | main `ring_mla` | unrolled-V `sp_only` | unrolled-V `tp_sharded` | Speed-up kept with the sharded cache |
 |---|---|---|---|---|
@@ -72,17 +86,30 @@ Absolute times from run 1:
 | K2.7 50k | 6.832 ms | 5.451 ms (−20.2%) | 5.548 ms (−18.8%) | 93% |
 | K2.7 256k | 29.462 ms | 22.110 ms (−25.0%) | 22.466 ms (−23.7%) | 95% |
 
-The X5 gate on `tp_sharded` vs `sp_only`, two runs of the current method:
+**Phase 3 (prefetch), the X5 gate.** The timed forward is a steady-state layer: layer 1 of 3, whose latent was
+prefetched during layer 0's SDPA and which prefetches layer 2's during its own (`trace_time` with
+`num_cache_layers=3`). Overhead vs `sp_only` on the same layer; run 2's absolute times in brackets:
 
-| Point | Run 1 | Run 2 | Gate |
-|---|---|---|---|
-| K3 50k | +0.83% | +1.29% | +2.5% |
-| K3 512k | +1.06% | +1.16% | +2.2% |
-| K2.7 50k | +1.78% | +0.81% | +3.0% |
-| K2.7 256k | +1.61% | +2.01% | +3.0% |
+| Point | `sp_only` | Serial, run 1 / 2 | Prefetch, run 1 / 2 | Gate |
+|---|---|---|---|---|
+| K3 50k | 7.582 ms | +0.19% / +0.62% | +0.19% / +0.06% | +1.2% |
+| K3 512k | 61.779 ms | +0.92% / +1.08% | +0.14% / +0.07% | +1.1% |
+| K2.7 50k | 5.467 ms | +1.52% / +1.32% | +1.15% / +1.29% | +2.4% |
+| K2.7 256k | 22.127 ms | +1.73% / +1.55% | +0.31% / +0.11% | +1.3% |
 
-- **Where the overhead comes from:** the TP gather runs serially ahead of the expansion. That's about 0.1 ms at 50k
-  (mostly fixed latency) and 0.3–0.6 ms at 256k–512k. Phase 3 (overlap) is what removes it.
+- **Where the overhead comes from:**
+  - **Serial:** the TP gather runs ahead of the expansion. It costs about 0.1 ms at 50k, mostly fixed latency, and
+    0.3–0.6 ms at 256k–512k.
+  - **Prefetch:** hides nearly all of the gather at 256k–512k.
+  - **K2.7 50k:** three more runs gave prefetch +1.37 / +1.33 / +0.77% and serial +1.39 / +2.56 / +1.78%. Over all
+    five, the means are +1.18% prefetch and +1.71% serial. There the gather is fixed latency, and running it
+    concurrently doesn't hide it.
+  - **What it isn't:** the sub-device load/clear. A region without the gather measures 5.420 ms against 5.460 ms
+    `sp_only`. Moving the gather to the SDPA's idle row 9, or using one link, changes nothing (+1.45%).
+- **Device profile, K2.7 50k layer 1 (prefetch vs `sp_only`):**
+  - the local chunk write adds 9 µs;
+  - the SDPA is 13 µs slower;
+  - the o_proj reduce-scatter after the region takes 348 vs 255 µs (chip skew).
 - **Gate history:** the gates were first estimated (+1.5/+1.2/+2.0/+1.5%). They are now the worst current-method
   sample plus about 1 pp, since run-to-run noise in the overhead is about ±0.5 pp at 50k and up to 0.4 pp at
   256k–512k. Earlier samples taken with older methods (first replay only, or back-to-back medians) are not used.
@@ -122,6 +149,7 @@ T=models/demos/deepseek_v3_d_p/tests/test_mla.py
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k "outer_blocks or selected_slot_width_gather"
 scripts/run_safe_pytest.sh --run-all $T::test_mla_chunked_prefill_tp_sharded_matches_sp_only      # X2 (golden case needs KIMI_K3_HF_MODEL)
 TT_METAL_TRACE_ALLOC_TRACKING=1 scripts/run_safe_pytest.sh --run-all $T::test_mla_tp_sharded_trace_replay_multi_layer  # X4
+scripts/run_safe_pytest.sh --run-all $T::test_mla_tp_latent_prefetch_matches_sp_only            # Phase 3 prefetch, bitwise
 scripts/run_safe_pytest.sh --run-all $T::test_mla_chunked_tp_sharded_traced_perf                   # X5 (high-power host)
 scripts/run_safe_pytest.sh --run-all $T::test_mla_tp_sharded_dram_saving                           # X6
 scripts/run_safe_pytest.sh --run-all $T::test_mla_chunked_prefill -k "torus-xy-8x4 and tp_sharded and (k3 or k2_7)"
@@ -133,17 +161,23 @@ scripts/run_safe_pytest.sh --run-all $T::test_mla_chunked_prefill -k "torus-xy-8
 
 ## Next steps
 
-1. **CI (X8):** run the Blaze prefill legs on this branch, i.e. the PR's K2.7/K3 `tp_sharded` `maxedge` legs and the
+1. **Review the Phase 3 commit** (X9): Claude Code and Codex gpt-6-astra, per PLAN.md §0. Fix blockers and majors in a
+   reviewed follow-up.
+2. **Decide on K2.7 50k (author).** The prefetch misses Phase 3's ≤ +0.5% there: +1.18% mean over 5 runs, against
+   +1.71% mean serial. It is on by default as a deliberate exception to PLAN §0's merge rule, since it is not slower
+   than serial on average and removes ≈0.8–1.4 pp (means) at 256k–512k. The alternative is opt-in;
+   `ttMLA(tp_latent_prefetch=False)` turns it off.
+3. **Model-level checks with weights:** the PR's K2.7 transformer test (`test_kimi_prefill_transformer_chunked_padded`
+   `L10 and mid15k and tp_sharded`, traced and untraced) and the K3 transformer test, with the prefetch on. The
+   transformer forwards the trace controller to MLA (`TtPrefillBlock`, and now the K3 block).
+4. **CI (X8):** run the Blaze prefill legs on this branch, i.e. the PR's K2.7/K3 `tp_sharded` `maxedge` legs and the
    K2.7 transformer legs. Update `K3_CHUNKED_RT_PERF_NS`: `test_mla_chunked_perf_check` still has main's 10.556 ms
    target, while this branch measures ~7.66 ms on `sp_only`.
-2. **Rebase onto main once PR #59531 merges,** dropping the merge commit.
-3. **Phase 3, overlap (optional, PLAN.md §4.4):** run the TP gather alongside CCL-free compute using sparse MLA's
-   80/40 sub-device pattern (`tt_ccl.get_sparse_mla_overlap_resources`, `SubDeviceTraceController`). Target ≤ +0.5%
-   overhead.
-4. **Follow-up, expanded K on arrival (PLAN.md §6):** unabsorbed QK at 192 wide. Napkin estimate: −21% to −26%
+5. **Rebase onto main once PR #59531 merges,** dropping the merge commit.
+6. **Follow-up, expanded K on arrival (PLAN.md §6):** unabsorbed QK at 192 wide. Napkin estimate: −21% to −26%
    attention at HiFi2. This branch keeps the latent as K's wire format and the slot at 576 columns, so the step stays
    open.
-5. **Upstream bits worth splitting out as separate PRs:**
+7. **Upstream bits worth splitting out as separate PRs:**
    - `high_bw_all_gather` `outer_block_rows` (useful on its own);
    - the review findings on PR #59531 itself, which are not this branch's code: sparse `tp_shard_kv=False` must be
      rejected, and `zero_padded_kv_cache` with `tp_axis` has no op test.

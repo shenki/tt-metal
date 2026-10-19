@@ -12,6 +12,7 @@ The `matches_config` test is host-only (no device); the build→cache-only→PCC
 mesh so the dense 128-head epilogue fits (TP=1 overflows L1).
 """
 
+import contextlib
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -203,8 +204,15 @@ def test_glm53_persistent_indexer_indices_are_replaced_without_deallocation(monk
     transformer.padding_side = "right"
     transformer.kv_only_last_layer = False
     transformer.is_last_rank = False
+    transformer.mesh_device = object()
 
     monkeypatch.setattr(transformer_module, "signpost", lambda *args, **kwargs: None)
+    # The layer loop opens a TP latent prefetch chain (dense tp_shard_kv only); a no-op scope here.
+    monkeypatch.setattr(
+        transformer_module,
+        "get_tt_ccl",
+        lambda mesh_device: SimpleNamespace(tp_latent_prefetch_chain=lambda stop_layer=None: contextlib.nullcontext()),
+    )
     monkeypatch.setattr(
         ttnn,
         "deallocate",

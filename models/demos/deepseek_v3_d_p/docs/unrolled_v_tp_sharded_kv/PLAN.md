@@ -42,7 +42,11 @@ rev 3.
   the pre-rebase branch.
 - **Phase 2:** X1–X8 all hold. This is the merge point.
 - **Phase 3 (optional):** traced-replay overhead ≤ +0.5% at all four points, with X2–X4 and X8 still holding.
-  Otherwise the overlap isn't merged.
+  Otherwise the overlap isn't merged. Outcome (§4.4 rev 5): met at K3 50k, K3 512k and K2.7 256k. K2.7 50k stays at
+  +1.2% mean (serial +1.7% mean): the gather there is fixed latency that concurrency does not hide. **Open decision
+  for the author:** the overlap is committed on by default as a deliberate exception to this rule, since it is not slower
+  than serial on average anywhere and removes ≈0.8–1.4 pp (means) at 256k–512k. The alternative is opt-in
+  (`ttMLA(tp_latent_prefetch=...)`).
 
 **Stop and re-plan if:**
 - any of X2 or X4 fails for a reason other than a bug;
@@ -246,26 +250,64 @@ persistent output, `input_batch_index_tensor` slot selection, and the `gathered_
   - only when `tp_shard_kv`.
 - Tests and perf (§4.5).
 
-### 4.4 Phase 3 (after Phase 2 lands): overlap, following sparse MLA's pattern
-- **Reuse the existing pieces:**
-  - the sparse MLA overlap resources: `tt_ccl.get_sparse_mla_overlap_resources`, profile `loudbox_80_40` on the 12×10
-    Galaxy grid, with 80 compute cores (x 0–7), 40 gather cores (x 8–11) and caller-owned ready/data_valid
-    semaphores. Dense Kimi layers have no indexer, so the same per-mesh resources can be shared;
-  - its closed-region structure (`_select_and_gather_overlapped`): load the manager through the trace controller, run
-    the two branches on their sub-devices, and let the clear be the device-side join. On error, reset the semaphores.
-  - `SubDeviceTraceController`, which splits the trace at each load/clear. PR #60928's traced-replay timing goes
-    through it.
-- **Region contents:**
-  - the TP latent gather on the 40-core gather sub-device (`subdevice_id`, `sub_core_grids`, the two semaphores). The
-    sparse KV gather already runs `high_bw_all_gather` exactly this way (`_gather_kvpe_prefix`);
-  - CCL-free compute on the 80-core sub-device. Candidates, picked from Phase 0's per-layer timeline:
-    - the q-side projection matmuls and norms that run after the cache write;
-    - the expansion of the chip's own stripe straight from the cache. That needs a block-interleaved row map on
-      `minimal_matmul`'s output.
-- **Budget:** the hidden time is bounded by the CCL-free compute available, about 0.4 ms of projection matmuls per
-  layer, prefix-independent. The cost is 2 extra trace segments per layer. Measure both with the traced replay, and
-  keep the overlap only where it wins (≤ +0.5%, G3).
-- **Fallback** if the available compute is too short: fuse the gather into the expansion matmul as one program.
+### 4.4 Phase 3: overlap — prefetch the next layer's latent during this layer's SDPA
+
+**Rev 5 (2026-10-17), as built.** The original §4.4 hid the gather behind the q-side projections on an 80/40 core
+split. Two measurements ruled that out:
+- **Too little to hide behind.** Device times per 5k chunk (realtime profiler): the TP latent gather is 177 µs at K3
+  50k, 781 µs at K3 512k and 459 µs at K2.7 256k. The CCL-free q-side compute is about 170 µs (K3) and 110 µs (K2.7).
+- **Not confinable.** Almost every q-side op (`q_b_proj`, `nlp_create_q_heads_split`, `rms_norm`, the RoPE ops) puts
+  work on cores in both halves of an 80/40 split. That is a fatal error under a loaded manager, and several of these
+  ops take no core-grid argument.
+
+**The design.** Most of a layer's gather does not depend on that layer's computation: it moves the layer's earlier
+chunks, which are already in its cache. Only the current chunk is new, and every TP chip already holds that chunk's
+whole SP-local latent (`tt_kvpe`). So:
+1. **Double-buffered latent.** There are two TP latent buffers; layer L reads buffer L % 2 (`tt_ccl.get_mla_tp_latent_slot(index=)`).
+2. **Prefetch during the SDPA.** Layer L's `ring_joint` runs inside a sub-device manager
+   (`tt_ccl.get_tp_latent_prefetch_resources`):
+   - SDPA sub-device: the SDPA compute grid (x 0–10) plus its ring all-gather workers (x 11, y 0–3);
+   - gather sub-device: the 6 idle cores at x 11, y 4–9.
+
+   Layer L+1's TP gather runs alongside, on the TP links, which the SDPA (SP ring) does not use. It reads layer
+   L+1's cache, which layer L does not touch, and writes buffer (L+1) % 2, last read by layer L−1. The manager clear is
+   the device-side join. Caller-owned semaphores are used, as in sparse MLA's `_select_and_gather_overlapped`.
+3. **Consume.** Layer L+1 writes only its current chunk into the prefetched buffer, locally:
+   `update_padded_kv_cache` without `tp_axis`, i.e. the pre-#59531 TP-replicated write, clamped to `actual_end`.
+   The prefetch read this layer's cache before its write, so this chunk's rows in it are stale until then; rows
+   past `actual_end` are written by neither and hold the same bytes either way.
+4. **Matching.** The host cannot see metadata values, so the prefetch is scoped. It runs only inside
+   `tt_ccl.tp_latent_prefetch_chain()`, which the owner of the layer loop opens:
+   - `TtPrefillTransformer` and the K3 transformer each open one around their loop.
+   - The caller promises that the forwards inside are consecutive layers of one chunk, with unchanged metadata.
+   - `stop_layer` excludes a kv_only last layer.
+
+   A host-side key, `tt_ccl.tp_latent_prefetched`, records what was prefetched: the chain, cache buffer and layer, plus
+   either the metadata tensors (metadata path) or the flat slot and prefix (scalar path). The next forward consumes
+   the prefetch only if its key matches.
+
+   The key is dropped:
+   - on entering or leaving a chain;
+   - by `set_tp_shard_kv`;
+   - by every consuming forward.
+
+   Anything else, including layer 0 and any forward outside a chain, gathers serially as in Phase 2.
+5. **Traces.** The capture is split at each load/clear by `SubDeviceTraceController`, giving 2 extra segments per
+   layer. `TtPrefillBlock` and the K3 block forward the controller to MLA. `ttMLA(tp_latent_prefetch=False)` turns the
+   prefetch off.
+
+**Cost.** One extra local write per layer (≈9 µs), and a second latent buffer. That buffer is ≈40 MB per chip at K3
+512k, against a DRAM saving of over 0.6 GB.
+
+**Result (steady-state layer, traced replays; STATUS.md):**
+- At 256k–512k the prefetch hides nearly all of the gather: K3 512k drops from +0.92% to +0.14%, and K2.7 256k from
+  +1.73% to +0.31%.
+- At 50k the gather is mostly fixed latency, and running it concurrently does not hide it.
+  - K2.7 50k is +1.18% mean over 5 runs (+0.77 to +1.37%), against +1.71% mean serial (+1.32 to +2.56%).
+  - The load/clear is not the cost: a region without the gather is no slower than `sp_only`.
+  - Moving the gather to the SDPA's idle row 9 (`ring_sdpa_compute_grid` 11×9), or using one link, changes nothing.
+- The Phase 3 exit (≤ +0.5% at all four points) is met at three of four points. K2.7 50k misses it; there the prefetch
+  is within noise of serial and lower on average. See the open decision in §0.
 
 ### 4.5 Tests, perf, CI (in Phase 2, re-run after Phase 3)
 **Model**
