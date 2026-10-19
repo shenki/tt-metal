@@ -43,10 +43,10 @@ rev 3.
 - **Phase 2:** X1–X8 all hold. This is the merge point.
 - **Phase 3 (optional):** traced-replay overhead ≤ +0.5% at all four points, with X2–X4 and X8 still holding.
   Otherwise the overlap isn't merged. Outcome (§4.4 rev 5): met at K3 50k, K3 512k and K2.7 256k. K2.7 50k stays at
-  +1.2% mean (serial +1.7% mean): the gather there is fixed latency that concurrency does not hide. **Open decision
-  for the author:** the overlap is committed on by default as a deliberate exception to this rule, since it is not slower
-  than serial on average anywhere and removes ≈0.8–1.4 pp (means) at 256k–512k. The alternative is opt-in
-  (`ttMLA(tp_latent_prefetch=...)`).
+  +1.2% mean (serial +1.7% mean): the gather there is fixed latency that concurrency does not hide. **Decided by the
+  author (2026-10-18):** the overlap stays on by default as a deliberate exception to this rule. It is not slower than
+  serial on average anywhere and removes ≈0.8–1.4 pp (means) at 256k–512k; `ttMLA(tp_latent_prefetch=False)` turns it
+  off.
 
 **Stop and re-plan if:**
 - any of X2 or X4 fails for a reason other than a bug;
@@ -307,7 +307,7 @@ whole SP-local latent (`tt_kvpe`). So:
   - The load/clear is not the cost: a region without the gather is no slower than `sp_only`.
   - Moving the gather to the SDPA's idle row 9 (`ring_sdpa_compute_grid` 11×9), or using one link, changes nothing.
 - The Phase 3 exit (≤ +0.5% at all four points) is met at three of four points. K2.7 50k misses it; there the prefetch
-  is within noise of serial and lower on average. See the open decision in §0.
+  is within noise of serial and lower on average. The author kept it on by default (§0).
 
 ### 4.5 Tests, perf, CI (in Phase 2, re-run after Phase 3)
 **Model**
@@ -469,3 +469,52 @@ respects so that step stays a kernel change:
 | Integration needs the whole PR, not just the conflict hunks (Codex) | §4.2 |
 | Wrong op test path (both) | §3, §5.4 |
 | Layer index is a captured host argument (Codex) | G5 wording: per-layer captured invocations; user and prefix change |
+
+## 9. TODO: remove the split-KV SDPA code from PR #58613 (follow-up, separate PR)
+
+**Why.** PR #58613 (merge `892e1e049046`, owner skrsticTT, already on `main`) added a split-KV mode to `ring_mla`
+(`cluster_axis=None`): the latent KV cache striped over SP × TP and attended as packed sources inside the SDPA. This
+plan replaces that with the TP latent gather plus unrolled-V `ring_joint`, so nothing in production uses the
+split-KV attention any more. Removing it simplifies the kernels that expanded K now lives in, cuts compile variants and
+drops two CI legs. **The snake / full-mesh gather stays** (it is separate, and the GLM indexer and #54941's full-mesh
+route use it).
+
+**Reachability (checked 2026-10-18, read-only):**
+- `mla.py` no longer calls `ring_mla`. `_unrolled_v_attn` and `_dense_single_attn` call
+  `ring_joint_scaled_dot_product_attention` with `cluster_axis=self.sp_axis`, which cannot reach split-KV (the op
+  derives `kv_stripe_split` only from `ring_mla(cluster_axis=None)`).
+- Gemma4 (`models/demos/gemma4_d_p/tt/attention/ring_prefill.py:216`) calls `ring_mla` on the classic ring
+  (`cluster_axis=cp_axis`), not split-KV.
+- The GLM indexer's `cluster_axis=None` gather is a separate op (`ring_indexer_score_dsa`) and includes none of the
+  PR's headers.
+- Expanded K and unrolled V do not depend on split-KV; `k_expand` rejects it in the device op. The coupling is textual:
+  our template parameters sit beside `packed_kv_enabled` in `compute_streaming.hpp` and `ring_joint_sdpa.cpp`.
+
+**What to do:**
+1. Agree the removal with skrsticTT and the `ring_joint` / `ring_mla` owners. Land it after this branch merges, so the
+   kernel conflicts are resolved once.
+2. Delete `ring_mla_packing_plan.hpp` (424 lines) and `ring_mla_geometry.hpp` (40), and their includes.
+3. Delete the packed-source paths (`GROUPED_KV_SOURCE_COUNT > 1`): `ring_joint_reader.cpp`, `ring_joint_writer.cpp`,
+   `ring_joint_sdpa.cpp`, and `compute_streaming.hpp`. Across the SDPA kernels: `packed_kv_enabled` on 17 lines (11 in
+   `compute_streaming.hpp`), `packed_sources` on 47 (17 there), `GROUPED_KV_SOURCE_COUNT` on 10. Delete the `kv_stripe_split > 1`
+   validation in the device op and the program factory, the named compile-time argument, and the split-KV golden
+   reorder (`_ring_mla_split_kv_global_order`) and nanobind docstring text. Roughly 500–700 lines.
+4. Fold `kv_stripe_split` to 1 where it is threaded through shared code instead of deleting those call sites:
+   `is_chunked(...)`, `kv_pad_from_metadata`, `ring_index / kv_stripe_split` in `chunked_prefill_utils.hpp`, the
+   writer's `get_end_seq_tile` calls, and `kv_region_Nt` in the pad derivation.
+5. Tests and CI:
+   - Delete `tests/nightly/blackhole/sdpa/test_ring_mla_fused_gather.py`, the split-KV cases in
+     `test_sdpa_golden_functions.py`, and `test_ring_mla_packing_plan.cpp` (with its `sources.cmake` line).
+   - In the QB2 sanity job (`blackhole_multi_card_sanity_tests.yaml`), remove only the split-KV pytest command, the
+     comment above it, and the now-dead `--ignore=...test_ring_mla_fused_gather.py` on the `sdpa/` line. The job also runs
+     the remaining SDPA, `high_bw_all_gather` and indexer tests, including full-mesh cases, which stay.
+   - Remove the split-KV perf gate (`blaze_models_prefill_tests.yaml`), and restore the timeout and time budget the PR
+     added.
+   - Keep the full-mesh `ring_joint` tests from #54941.
+6. Verify: Gemma4 ring prefill (classic `ring_mla`), the nightly `ring_joint` / `ring_mla` suites, the Kimi MLA and
+   expanded-K tests, and GLM sparse MLA. Program hashes change with the dropped compile argument.
+7. On this branch now (small): fix the stale comment at `tt/runners/adapters/kimi_k2_7.py:47` ("read in place by
+   ring_mla"), so it points at the TP latent gather.
+
+**Risks.** Another model could start using split-KV on `main` before this lands; check `ring_mla(cluster_axis=None)`
+callers again at removal time. Gemma4 shares the kernels, so its classic-ring path needs a rerun.

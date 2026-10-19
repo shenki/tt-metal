@@ -555,6 +555,53 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
+    if (tensor_args.has_k_expand()) {
+        // MLA expanded K: one shared latent K head, per-head V, streaming compute on the chunked/causal path.
+        // Everything else (joint, packed or latent V, sinks, sliding or circular KV, split KV, balanced, B > 1) is
+        // outside the supported domain.
+        const auto& weight = tensor_args.k_expand_weight.value();
+        const auto& q_shape = input_tensor_q.logical_shape();
+        const auto& k_shape = tensor_args.input_k.logical_shape();
+        TT_FATAL(args.is_causal && !args.is_cross, "RingJointSDPA k_expand_weight requires causal self-attention");
+        TT_FATAL(!has_joint_tensors, "RingJointSDPA k_expand_weight does not support joint attention tensors");
+        TT_FATAL(!has_latent_v, "RingJointSDPA k_expand_weight requires a separate per-head V (no latent V)");
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "RingJointSDPA k_expand_weight does not support sinks");
+        TT_FATAL(
+            !args.has_sliding_window() && !args.circular_kv_cache && args.kv_stripe_split == 1 && !args.is_balanced,
+            "RingJointSDPA k_expand_weight supports neither sliding/circular KV, split KV nor balanced attention");
+        TT_FATAL(q_shape[0] == 1, "RingJointSDPA k_expand_weight requires batch 1, got {}", q_shape[0]);
+        TT_FATAL(k_shape[1] == 1, "RingJointSDPA k_expand_weight requires one shared K head, got {}", k_shape[1]);
+        TT_FATAL(
+            q_shape[3] > kKExpandNopeDim && k_shape[3] == kKExpandLatentDim + (q_shape[3] - kKExpandNopeDim),
+            "RingJointSDPA k_expand_weight: Q must be [q_nope ({}) | q_pe] and K [c_kv ({}) | k_pe] with matching PE "
+            "widths. Got Q: {}, K: {}",
+            kKExpandNopeDim,
+            kKExpandLatentDim,
+            q_shape[3],
+            k_shape[3]);
+        TT_FATAL(
+            !get_fp32_dest_acc_en(args.compute_kernel_config),
+            "RingJointSDPA k_expand_weight requires streaming compute; set fp32_dest_acc_en=false");
+        TT_FATAL(weight.storage_type() == StorageType::DEVICE && weight.buffer() != nullptr, "W_UK must be on device");
+        TT_FATAL(input_tensor_q.device() == weight.device(), "W_UK must be on the same mesh device as Q/K/V");
+        TT_FATAL(
+            weight.layout() == Layout::TILE && weight.dtype() == DataType::BFLOAT8_B &&
+                weight.memory_config() == tt::tt_metal::MemoryConfig{},
+            "W_UK must be BF8 TILE, DRAM interleaved. Got {} {} {}",
+            weight.dtype(),
+            weight.layout(),
+            weight.memory_config());
+        const auto& w_shape = weight.logical_shape();
+        TT_FATAL(
+            w_shape.rank() == 4 && w_shape[0] == 1 && w_shape[1] == q_shape[1] && w_shape[2] == kKExpandNopeDim &&
+                w_shape[3] == kKExpandLatentDim,
+            "W_UK must be [1, {}, {}, {}] (W_UK per local Q head, wkv_b1 as stored), got {}",
+            q_shape[1],
+            kKExpandNopeDim,
+            kKExpandLatentDim,
+            w_shape);
+    }
+
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
     if (has_gathered_v) {
         sdpa_input_tensors.push_back(tensor_args.gathered_v.value());
@@ -952,7 +999,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 joint_v_shape[3]);
         }
     } else {
-        if (!tensor_args.has_packed_kv()) {
+        // Expanded K: K is the latent, checked against Q's width in the k_expand_weight block above.
+        if (!tensor_args.has_packed_kv() && !tensor_args.has_k_expand()) {
             TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
         }
         if (has_joint_tensors) {
@@ -1191,6 +1239,10 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     if (tensor_args.attention_sink.has_value()) {
         input_tensors.emplace_back(tensor_args.attention_sink.value());
     }
+    // Expanded K: the weight's spec is keyed through input_tensors; its address is a runtime arg.
+    if (tensor_args.has_k_expand()) {
+        input_tensors.emplace_back(tensor_args.k_expand_weight.value());
+    }
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
@@ -1227,6 +1279,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
         args.sliding_window_size,
+        tensor_args.has_k_expand(),
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args);
 }
@@ -1363,7 +1416,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
-    const std::optional<ttnn::Tensor>& logical_l_tensor) {
+    const std::optional<ttnn::Tensor>& logical_l_tensor,
+    const std::optional<ttnn::Tensor>& k_expand_weight) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1606,7 +1660,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .slot_id = slot_id,
         .kv_actual_isl = kv_actual_isl_tensor,
         .logical_n_tensor = logical_n_tensor,
-        .logical_l_tensor = logical_l_tensor};
+        .logical_l_tensor = logical_l_tensor,
+        .k_expand_weight = k_expand_weight};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

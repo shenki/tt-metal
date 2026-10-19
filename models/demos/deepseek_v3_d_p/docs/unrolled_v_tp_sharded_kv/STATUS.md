@@ -52,10 +52,12 @@ Milestone: Phases 2 and 3 of [PLAN.md](PLAN.md) (TP latent gather; prefetched du
 | `a167a715772` | Expanded-K plan rev 2 (docs only, [../expanded_k/PLAN.md](../expanded_k/PLAN.md)) | plan reviews (rev 1) in its §8 |
 | `cb503a22535` | Phase 3 round-2 fixes: MTP stop layer, manager release on failure, stronger interruption checks, GLM host-test stub | [log](reviews/cb503a22535.md) |
 | `d340d30ec80` | Phase 3 round-3 fixes: both layout-change variants checked, finalizer before construction, host test of the transformer's stop layer | [log](reviews/d340d30ec80.md) |
-| *(last)* | Phase 3 round-4: device check of a chain's stop layer | **pending** (next step 1) |
+| `7e8c371d91f` | Phase 3 round-4: device check of a chain's stop layer | [log](reviews/7e8c371d91f.md) |
+| `c19695fd7b5` … | Expanded K on arrival, Phases 1 and 2, and their review rounds: tracked in [../expanded_k/STATUS.md](../expanded_k/STATUS.md), review logs in `../expanded_k/reviews/`. `c19695fd7b5` also added the stop-layer clamp check ([log](reviews/7e8c371d91f.md) finding 1) | see `../expanded_k/reviews/` |
 
-Each code commit up to `239b41cb8e5` was reviewed by Claude Code and Codex (gpt-6-astra). Every finding is fixed, or
-answered in its log.
+Every Phase 2 and Phase 3 code commit, through `7e8c371d91f`, was reviewed by Claude Code and Codex (gpt-6-astra);
+every finding is fixed or answered in its log. Expanded-K commits from `c19695fd7b5` on are reviewed and logged under
+`../expanded_k/reviews/` (that plan's E6).
 
 ## Exit criteria (PLAN.md §0)
 
@@ -65,11 +67,11 @@ answered in its log.
 | X2 | `tp_sharded` bitwise equal to `sp_only` | ✅ | `test_mla_chunked_prefill_tp_sharded_matches_sp_only`: 58 passed on functional + golden inputs, plus 44 passed on CPU-reference inputs, with the shared slot poisoned before every forward. Exclusions: no K2.7 golden trace exists (2 skips), and the deep/production scenarios have no CPU-reference case (CPU MLA too slow); both run on functional inputs. The PR's `test_mla_chunked_prefill` `tp_sharded` matrix: 140 passed, 0 failed. |
 | X3 | No regressions | ✅ | 53 Galaxy MLA tests pass on `sp_only`, with PCCs identical to before the merge. K3 KDA carry (`kimi_k3/test_chunked_prefill.py`): 4/4. |
 | X4 | Captured multi-layer, multi-user trace | ✅ | `test_mla_tp_sharded_trace_replay_multi_layer` (K2.7, K3): 3 layers (each on its own cache slot), 2 users, one capture replayed over 7 steps with user and prefix changed in place (long → short → long, rotated starts on a chip boundary), slot poisoned before every replay. Traced replay == `tp_sharded` eager == `sp_only` eager, bitwise, for both the outputs and the un-striped caches, with every (user, layer) slot written. Layouts alternate: the capture stays alive through the `sp_only` pass, then eager `tp_sharded` forwards and a second replay of the same capture must still match. Every program is compiled before the capture. Rows past user 1's extent are written only in user 0's slots, which catches a transposed slot mapping. No program compiles while the trace is alive (asserted); with `TT_METAL_TRACE_ALLOC_TRACKING=1` no allocation made while it is alive is live at a replay (passes). Mid-chip rotated starts are covered by the single-layer X2 scenarios. The PR's 10-layer K2.7 transformer test passes `tp_sharded` traced and untraced (Phase 2; not re-run with the prefetch, which needs the model weights). **Phase 3:** 3 layers; each but the last prefetches the next layer's latent during its SDPA (layer 2 reuses layer 0's buffer), so the capture is segmented (`SubDeviceTraceController`); the test passes for K2.7 and K3 with allocation tracking (the outputs, allocated in the last segment, are acknowledged). `test_mla_tp_latent_prefetch_matches_sp_only` (K2.7, K3 × scalar, metadata; 3 layers, 2 users, chunk-aligned / chip-boundary / mid-chip starts, partial chunks): prefetch == serial == `sp_only` bitwise, outputs and caches, and layers 1–2 consumed their prefetch on every step; no prefetch is consumed across separate chains or a `set_tp_shard_kv` layout change. |
-| X5 | Traced perf gate | ✅ | Steady-state layer with the prefetch, two runs, 4/4 points each (below). Gates are the worst measured sample plus about 1 pp of measured noise: +1.2 / +1.1 / +2.4 / +1.3%. Phase 3's ≤ +0.5% holds at K3 50k, K3 512k and K2.7 256k. K2.7 50k stays at +1.18% mean (serial +1.71% mean); see next step 2. The serial path keeps Phase 2's gates. |
+| X5 | Traced perf gate | ✅ | Steady-state layer with the prefetch, two runs, 4/4 points each (below). Gates are the worst measured sample plus about 1 pp of measured noise: +1.2 / +1.1 / +2.4 / +1.3%. Phase 3's ≤ +0.5% holds at K3 50k, K3 512k and K2.7 256k. K2.7 50k stays at +1.18% mean (serial +1.71% mean); kept on by the author, see next step 1. The serial path keeps Phase 2's gates. |
 | X6 | DRAM saving | ✅ | `test_mla_tp_sharded_dram_saving`, measured per chip at exact capacities, net of both TP latent buffers: 0.645 GB (K3 512k), 0.886 GB (K2.7 256k) per user slot |
 | X7 | Op tests | ✅ | 18 new outer-block, width-gather and validation tests pass. Other failures in `test_high_bw_all_gather.py` on this Galaxy (3 bandwidth floors, 4 fabric-init errors) happen identically on main. |
-| X8 | Defaults and CI | ◐ | `sp_only` K3 50k is unchanged on the realtime profiler (7.654 / 7.660 ms vs 7.656 ms before). The criterion asks for a traced before/after, which was not measured: only the branch's traced `sp_only` (table below). **CI legs not run** (next step 4, deliberately out of this milestone). |
-| X9 | Two reviews per commit | ◐ | Every Phase 2 commit reviewed by both (last round `239b41cb8e5`: no blocker or major). The Phase 3 commit is pending review (next step 1) |
+| X8 | Defaults and CI | ◐ | `sp_only` K3 50k is unchanged on the realtime profiler (7.654 / 7.660 ms vs 7.656 ms before). The criterion asks for a traced before/after, which was not measured: only the branch's traced `sp_only` (table below). **CI legs not run** (next step 3, deliberately out of this milestone). |
+| X9 | Two reviews per commit | ✅ | Scope: this plan's commits (Phases 2–3); expanded-K commits count under `../expanded_k/STATUS.md` E6, which includes the pending latest commit. Every Phase 2 and Phase 3 commit reviewed by both, findings fixed or answered in `reviews/`; the Phase 3 rounds ended with `7e8c371d91f` (no blocker or major). Expanded-K commits are logged in `../expanded_k/reviews/` |
 
 ### Performance (X5)
 
@@ -161,23 +163,26 @@ scripts/run_safe_pytest.sh --run-all $T::test_mla_chunked_prefill -k "torus-xy-8
 
 ## Next steps
 
-1. **Review the Phase 3 commit** (X9): Claude Code and Codex gpt-6-astra, per PLAN.md §0. Fix blockers and majors in a
-   reviewed follow-up.
-2. **Decide on K2.7 50k (author).** The prefetch misses Phase 3's ≤ +0.5% there: +1.18% mean over 5 runs, against
-   +1.71% mean serial. It is on by default as a deliberate exception to PLAN §0's merge rule, since it is not slower
-   than serial on average and removes ≈0.8–1.4 pp (means) at 256k–512k. The alternative is opt-in;
+1. **K2.7 50k: decided (author, 2026-10-18).** The prefetch misses Phase 3's ≤ +0.5% there (+1.18% mean over 5
+   runs, against +1.71% mean serial). It stays on by default as a deliberate exception to PLAN §0's merge rule, since
+   it is not slower than serial on average and removes ≈0.8–1.4 pp (means) at 256k–512k.
    `ttMLA(tp_latent_prefetch=False)` turns it off.
-3. **Model-level checks with weights:** the PR's K2.7 transformer test (`test_kimi_prefill_transformer_chunked_padded`
+2. **Model-level checks with weights:** the PR's K2.7 transformer test (`test_kimi_prefill_transformer_chunked_padded`
    `L10 and mid15k and tp_sharded`, traced and untraced) and the K3 transformer test, with the prefetch on. The
    transformer forwards the trace controller to MLA (`TtPrefillBlock`, and now the K3 block).
-4. **CI (X8):** run the Blaze prefill legs on this branch, i.e. the PR's K2.7/K3 `tp_sharded` `maxedge` legs and the
+3. **CI (X8):** run the Blaze prefill legs on this branch, i.e. the PR's K2.7/K3 `tp_sharded` `maxedge` legs and the
    K2.7 transformer legs. Update `K3_CHUNKED_RT_PERF_NS`: `test_mla_chunked_perf_check` still has main's 10.556 ms
    target, while this branch measures ~7.66 ms on `sp_only`.
-5. **Rebase onto main once PR #59531 merges,** dropping the merge commit.
-6. **Follow-up, expanded K on arrival (PLAN.md §6):** unabsorbed QK at 192 wide. Napkin estimate: −21% to −26%
-   attention at HiFi2. This branch keeps the latent as K's wire format and the slot at 576 columns, so the step stays
-   open.
-7. **Upstream bits worth splitting out as separate PRs:**
+4. **Rebase onto main once PR #59531 merges,** dropping the merge commit.
+5. **Expanded K on arrival (PLAN.md §6): done through Phase 2**, behind `ttMLA(expanded_k=True)` (off by default).
+   Steady-state MLA forward vs absorbed unrolled-V: −20.7% to −25.1% at the four points; K3 512k is 47% faster than
+   main's `ring_mla`. Status, remaining work (default-on, groups of 4, model-level runs) and evidence:
+   [../expanded_k/STATUS.md](../expanded_k/STATUS.md).
+6. **Upstream bits worth splitting out as separate PRs:**
    - `high_bw_all_gather` `outer_block_rows` (useful on its own);
    - the review findings on PR #59531 itself, which are not this branch's code: sparse `tp_shard_kv=False` must be
      rejected, and `zero_padded_kv_cache` with `tp_axis` has no op test.
+7. **TODO: remove the split-KV SDPA code from PR #58613** (PLAN.md §9). This branch's TP latent gather replaces it,
+   and nothing in production reaches it any more. The snake gather stays. It is a separate cleanup PR against `main`,
+   agreed with skrsticTT and landed after this branch. The one change for this branch is the stale `ring_mla` comment in
+   the K2.7 adapter.

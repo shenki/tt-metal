@@ -18,6 +18,11 @@
 
 namespace ttnn::prim {
 
+// MLA expanded K (RingJointSDPAInputs::k_expand_weight): the latent's no-PE width, and the per-head no-PE width W_UK
+// expands it to. The latent's remaining columns are the PE part, shared by all heads.
+inline constexpr uint32_t kKExpandLatentDim = 512;
+inline constexpr uint32_t kKExpandNopeDim = 128;
+
 struct RingJointSDPAParams {
     std::string joint_strategy;
     std::optional<float> scale;
@@ -188,7 +193,15 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> logical_n_tensor;
     std::optional<Tensor> logical_l_tensor;
 
+    // MLA expanded K: W_UK per head, [1, NH, 128, 512] bf8 TILE DRAM (wkv_b1 as stored). K stays the shared latent
+    // [c_kv (kExpandLatentDim) | k_pe]; the kernels expand K_h = [c_kv @ W_UK_h^T | k_pe] per K chunk, so Q is the
+    // un-absorbed [q_nope | q_pe] and QK runs at Q's (narrower) head dim. Latent K keeps its own width on every
+    // data-movement path.
+    std::optional<Tensor> k_expand_weight;
+
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+
+    bool has_k_expand() const { return k_expand_weight.has_value(); }
 
     bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 

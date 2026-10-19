@@ -243,6 +243,21 @@ void kernel_main() {
     constexpr uint32_t NHK = get_compile_time_arg_val(2);
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    // Expanded K: Q is DHt_qk tiles wide while K (the latent) keeps DHt; the reader also pushes the core's head's W_UK
+    // into cb_wuk alongside every Q push. Without it DHt_qk == DHt.
+    constexpr bool k_expand = get_named_compile_time_arg_val("k_expand") == 1;
+    constexpr uint32_t DHt_qk = get_named_compile_time_arg_val("dht_qk");
+    constexpr uint32_t cb_wuk = get_named_compile_time_arg_val("cb_wuk");
+    // Expanded-K head groups (expanded-K PLAN.md section 3.4): the k_expand_group cores of a (K-split band, head) each
+    // expand kexp_own_rows of the 4 no-PE tile rows per K chunk; this reader sends its compute's rows to the peer's
+    // cb_kexp_peer and hands the peer's rows to its compute.
+    constexpr uint32_t k_expand_group = get_named_compile_time_arg_val("k_expand_group");
+    constexpr bool k_expand_grouped = k_expand && k_expand_group > 1;
+    constexpr uint32_t kexp_own_rows = 4 / k_expand_group;
+    constexpr uint32_t cb_kexp_own = get_named_compile_time_arg_val("cb_kexp_own");
+    constexpr uint32_t cb_kexp_peer = get_named_compile_time_arg_val("cb_kexp_peer");
+    constexpr uint32_t kexp_credit_sem = get_named_compile_time_arg_val("kexp_credit_sem");
+    constexpr uint32_t kexp_data_sem = get_named_compile_time_arg_val("kexp_data_sem");
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
     constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
@@ -518,6 +533,16 @@ void kernel_main() {
     constexpr bool ksplit_enabled = ksplit_count > 1;
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
+    // Expanded K: W_UK's address is the last runtime arg, after the rotated-split pairs or the K-split band
+    // (exclusive).
+    [[maybe_unused]] const uint32_t wuk_arg_idx =
+        rotated_args_base + (rotated_q_split_enabled ? 2 * ring_size : 0) + (ksplit_enabled ? 1 : 0);
+    [[maybe_unused]] const uint32_t wuk_addr = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx) : 0;
+    // Head groups: [rank, peer physical x, peer physical y] follow the W_UK address.
+    [[maybe_unused]] const uint32_t kexp_rank = k_expand_grouped ? get_arg_val<uint32_t>(wuk_arg_idx + 1) : 0;
+    [[maybe_unused]] const uint32_t kexp_peer_x = k_expand_grouped ? get_arg_val<uint32_t>(wuk_arg_idx + 2) : 0;
+    [[maybe_unused]] const uint32_t kexp_peer_y = k_expand_grouped ? get_arg_val<uint32_t>(wuk_arg_idx + 3) : 0;
+    [[maybe_unused]] uint32_t kexp_exchanged = 0;  // cumulative: semaphores count up and are reset by the launch
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
     // Common runtime args: metadata block first when present, then the logical-length pair.
@@ -761,7 +786,7 @@ void kernel_main() {
     const uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
     // The fused all-gather wrote the active slot to gathered slot 0, so address it as batch-1.
     const uint32_t gathered_kv_batch_dim = indexed_kv_cache ? 1 : B;
-    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt_qk);
     // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
     constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
     constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
@@ -774,7 +799,7 @@ void kernel_main() {
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
     // Joint Q addressing: per-device shard (Lt_local rows). Equals Lt on the replicated path
     // (Lt_local == Lt when joint is not sharded), so this is bit-identical there.
-    const auto joint_q_input_tile_logical = TensorTileShape(B, NH, Lt_local, DHt);
+    const auto joint_q_input_tile_logical = TensorTileShape(B, NH, Lt_local, DHt_qk);
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
@@ -1059,12 +1084,12 @@ void kernel_main() {
             }
 
             // Default to local Q tensor; override below for joint Q when applicable.
-            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt_qk);
             uint32_t q_end_seq_tile = q_local_padded_Nt;
             if constexpr (has_joint_q) {
                 if (is_joint_q) {
                     const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt_qk);
                     // Lt_local: per-device joint-Q shard tile count (== Lt on the replicated path).
                     // joint_q is a local tensor starting at row 0; the mesh tensor tracks which global
                     // prompt slice this device owns, so no ring_id offset is added here.
@@ -1353,7 +1378,7 @@ void kernel_main() {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                                 const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
                                 const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt_qk);
                                 read_block(
                                     q_gen,
                                     q_sub_slice,
@@ -1376,6 +1401,29 @@ void kernel_main() {
                     };
                     read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                         is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
+                    if constexpr (k_expand) {
+                        // This Q chunk's head's W_UK, [128, 512] = 4 x 16 tiles, tile-row-major: same lifetime as Q
+                        // (compute pops both together).
+                        // Only this core's rows of W_UK: rows [rank * own_rows, (rank + 1) * own_rows) of its 4 x 16.
+                        constexpr uint32_t wuk_tiles = kexp_own_rows * 16;
+                        // The op validates [c_kv (512) | k_pe] latent K and [q_nope (128) | q_pe] Q with matching PE
+                        // widths, so Q has exactly 4 tile rows more than the latent's PE part (compute's count).
+                        static_assert(
+                            !k_expand || DHt_qk + 16 == DHt + 4, "expanded K: W_UK is 128 x 512 (4 x 16 tiles)");
+                        constexpr uint32_t wuk_tile_bytes = get_tile_size(cb_wuk);
+                        const InterleavedAddrGenFast<true> wuk_gen = {
+                            .bank_base_address = wuk_addr,
+                            .page_size = wuk_tile_bytes,
+                            .data_format = get_dataformat(cb_wuk)};
+                        cb_reserve_back(cb_wuk, wuk_tiles);
+                        uint32_t wuk_write_ptr = get_write_ptr(cb_wuk);
+                        for (uint32_t t = 0; t < wuk_tiles; ++t) {
+                            noc_async_read_tile(nq * 64 + kexp_rank * wuk_tiles + t, wuk_gen, wuk_write_ptr);
+                            wuk_write_ptr += wuk_tile_bytes;
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_wuk, wuk_tiles);
+                    }
                     q_pushed = true;
                 }
                 first_k_for_q = false;
@@ -1469,6 +1517,32 @@ void kernel_main() {
 
                     // Make V available to compute.
                     cb_v.push_back(v_cb_entry_tiles);
+
+                    if constexpr (k_expand_grouped) {
+                        // Exchange this K chunk's expanded rows with the peer. Every core of the group walks the same
+                        // K chunks and pushes / pops these CBs identically, so the peer's receive slot for this chunk
+                        // sits at the same address as this core's own. Credit first (this core's slot is free), so
+                        // neither core waits on the other in a cycle.
+                        constexpr uint32_t kexp_tiles = kexp_own_rows * Sk_chunk_t;
+                        constexpr uint32_t kexp_bytes = kexp_tiles * k_tile_bytes;
+                        const uint32_t credit_addr = get_semaphore(kexp_credit_sem);
+                        const uint32_t data_addr = get_semaphore(kexp_data_sem);
+                        cb_reserve_back(cb_kexp_peer, kexp_tiles);
+                        const uint32_t slot_addr = get_write_ptr(cb_kexp_peer);
+                        noc_semaphore_inc(get_noc_addr(kexp_peer_x, kexp_peer_y, credit_addr), 1);
+                        cb_wait_front(cb_kexp_own, kexp_tiles);
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_addr), kexp_exchanged + 1);
+                        noc_async_write(
+                            get_read_ptr(cb_kexp_own), get_noc_addr(kexp_peer_x, kexp_peer_y, slot_addr), kexp_bytes);
+                        noc_async_write_barrier();
+                        noc_semaphore_inc(get_noc_addr(kexp_peer_x, kexp_peer_y, data_addr), 1);
+                        cb_pop_front(cb_kexp_own, kexp_tiles);
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_addr), kexp_exchanged + 1);
+                        cb_push_back(cb_kexp_peer, kexp_tiles);
+                        ++kexp_exchanged;
+                    }
                 }
             }
         }
@@ -1494,4 +1568,8 @@ void kernel_main() {
         }
     }
     synchronize_halo();
+    if constexpr (k_expand_grouped) {
+        // The exchange's semaphore increments are non-posted atomics: flush them before the kernel exits.
+        noc_async_atomic_barrier();
+    }
 }
