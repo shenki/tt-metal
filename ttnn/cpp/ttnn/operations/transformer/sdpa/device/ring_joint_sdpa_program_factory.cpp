@@ -310,7 +310,8 @@ RingWorkPlan build_ring_work_plan(
     const ttnn::prim::RingJointSDPAParams& args,
     const RingWritePlan& ring_write_plan,
     const RingJointRuntimeDerivation& derivation,
-    bool is_balanced) {
+    bool is_balanced,
+    bool named_recipe) {
     RingWorkPlan plan;
     RingIdSequencer seq(
         ring_write_plan.transport_rank,
@@ -375,7 +376,7 @@ RingWorkPlan build_ring_work_plan(
         // The recipes' chunked prefill also skips a step whose keys all follow this device's Q rows (the first chunk
         // group, K from a later device): its compute normalizes on the last step with visible keys.
         const bool recipe_chunked_masked =
-            args.precision.has_value() && derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled &&
+            named_recipe && derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled &&
             derivation.logical_nt <= derivation.q_chunk_group_tile_count && ring_write_plan.tensor_rank < ring_id;
         const bool ring_iter_does_work =
             (has_kv_work || joint_contributes) && !recipe_chunked_masked &&
@@ -537,7 +538,12 @@ RingJointRuntimePlan build_runtime_plan(
         // Sliding folds its local and predecessor ranges into one synthetic ring iteration.
         plan.ring_work_plan.masks.active_ring_iter_mask = 1;
     } else {
-        plan.ring_work_plan = build_ring_work_plan(args, ring_write_plan, derivation, args.is_balanced);
+        plan.ring_work_plan = build_ring_work_plan(
+            args,
+            ring_write_plan,
+            derivation,
+            args.is_balanced,
+            /*named_recipe=*/args.precision.has_value() && !ttnn::prim::named_ring_recipe_gap(args, tensor_args));
     }
     plan.kernel_chunked = derivation.kernel_chunked;
     plan.kernel_is_causal = derivation.kernel_is_causal;
@@ -1269,11 +1275,22 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
-    // ring_mla's BALANCED recipe keeps its running O and row sums in fp32 CBs that unpack straight to DEST
-    // (SDPA_FP32_STATE in compute_streaming.hpp); STANDARD and FAST keep them in bf16 with fp32 dest.
-    const bool fp32_running_state = fp32_dest_acc_en && tensor_args.v_shares_k_buffer() &&
-                                    !variant.resident_ring_state() &&
-                                    args.precision == ttnn::transformer::SDPAPrecision::BALANCED;
+    // A recipe the named ring kernels cannot take (named_ring_recipe_gap) is a fixed configuration of this streaming
+    // kernel: softmax arithmetic in fp32 DEST at HiFi2 (ACCURATE: HiFi4), LoFi matmuls for FAST (which expects
+    // prepare_sdpa_input'd inputs), the accurate exp for BALANCED and ACCURATE, whose running O and row sums are also
+    // kept in fp32 CBs that unpack straight to DEST (SDPA_FP32_STATE in compute_streaming.hpp). STANDARD and FAST
+    // keep them in bf16.
+    using ttnn::transformer::SDPAPrecision;
+    const std::optional<SDPAPrecision> streaming_recipe =
+        (args.precision && named_ring_recipe_gap(args, tensor_args)) ? args.precision : std::nullopt;
+    if (streaming_recipe) {
+        fp32_dest_acc_en = true;
+        math_approx_mode = false;
+        math_fidelity = *streaming_recipe == SDPAPrecision::ACCURATE ? MathFidelity::HiFi4 : MathFidelity::HiFi2;
+    }
+    const bool fp32_running_state =
+        streaming_recipe && !variant.resident_ring_state() &&
+        (*streaming_recipe == SDPAPrecision::BALANCED || *streaming_recipe == SDPAPrecision::ACCURATE);
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : mesh_device->compute_with_storage_grid_size();
@@ -1281,6 +1298,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         args.program_config.has_value()
             ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
             : true;
+    if (streaming_recipe) {
+        exp_approx_mode = *streaming_recipe == SDPAPrecision::STANDARD || *streaming_recipe == SDPAPrecision::FAST;
+    }
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet core_grid_set(core_grid);
@@ -1390,7 +1410,15 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
 
     // Host code is responsible for determining matmul configuration
-    const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
+    // A streaming recipe overrides the caller's (absent) compute config with fp32 DEST, which halves the DEST tiles.
+    const uint32_t dst_size = streaming_recipe ? ttnn::get_dest_reg_count(ttnn::init_device_compute_kernel_config(
+                                                     mesh_device->arch(),
+                                                     std::nullopt,
+                                                     math_fidelity,
+                                                     /*default_approx_mode=*/false,
+                                                     /*default_fp32_acc=*/true,
+                                                     /*default_l1_acc=*/false))
+                                               : ttnn::get_dest_reg_count(args.compute_kernel_config);
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
@@ -1411,10 +1439,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    // The streaming kernel is the only non-recipe compute path on this stack. ring_mla's precision recipes (latent V)
-    // run it with fp32 dest accumulation; other fp32-dest calls are routed to the ACCURATE ring recipe before here.
+    // The streaming kernel is the only non-recipe compute path on this stack. Recipes the named kernels cannot take
+    // (streaming_recipe) run it with fp32 dest accumulation; other fp32-dest calls are routed to ACCURATE before here.
     const bool use_streaming_compute = true;
-    TT_ASSERT(variant.resident_ring_state() || !fp32_dest_acc_en || v_shares_k_buffer);  // validated on cache miss
+    TT_ASSERT(variant.resident_ring_state() || !fp32_dest_acc_en || streaming_recipe.has_value());
 
     // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
     // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
@@ -1904,7 +1932,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         Sq_chunk_t * tt::constants::TILE_HEIGHT,
         kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
+    if (streaming_recipe == SDPAPrecision::FAST) {
+        defines["SDPA_MATMUL_FIDELITY"] = std::to_string(static_cast<uint32_t>(MathFidelity::LoFi));
+    } else if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }

@@ -139,6 +139,26 @@ struct RecipeBlocking {
 // definition. Exp ring programs are not covered.
 bool recipe_program_fits(const RecipeBlockingProblem& problem, uint32_t q_tiles, uint32_t k_tiles);
 
+// Whether the named ring recipe kernels take a caller-chosen chunk pair: a supported geometry whose program is not
+// known to exceed the kernel config buffer. Op-chosen chunks (0) always do, since the chooser only emits fitting ones.
+// Ring calls outside this run the recipe as a configuration of the streaming kernel instead (named_ring_recipe_gap).
+inline bool named_ring_recipe_chunks_fit(
+    const PrecisionPolicy& policy, uint32_t q_chunk, uint32_t k_chunk, uint32_t head_dim, uint32_t v_head_dim) {
+    if (q_chunk == 0 || k_chunk == 0) {
+        return true;
+    }
+    if (q_chunk % 32 != 0 || k_chunk % 32 != 0 || head_dim % 32 != 0) {
+        return false;
+    }
+    RecipeBlockingProblem ring;
+    ring.op = RecipeOp::Ring;
+    ring.policy = policy;
+    ring.d_tiles = head_dim / 32;
+    ring.vd_tiles = v_head_dim != head_dim ? v_head_dim / 32 : 0;
+    return recipe_geometry_supported(q_chunk / 32, k_chunk / 32, head_dim / 32) &&
+           recipe_program_fits(ring, q_chunk / 32, k_chunk / 32);
+}
+
 // Every feasible blocking with its modeled cost, cheapest first (the chooser's candidate list).
 std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProblem& problem);
 

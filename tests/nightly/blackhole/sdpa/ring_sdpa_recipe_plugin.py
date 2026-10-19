@@ -114,12 +114,13 @@ def _patch_module(module):
         def wrapped(expected, actual, *a, **k):
             result = fn(expected, actual, *a, **k)
             try:
-                e, x = expected.double(), actual.double()
+                e, x = expected.double().flatten(), actual.double().flatten()
                 rel = 100 * ((x - e).norm() / e.norm()).item()
+                ec, xc = e - e.mean(), x - x.mean()
+                pcc = ((ec @ xc) / (ec.norm() * xc.norm())).item()
+                _records["metrics"].append({"pcc": pcc, "rel_l2_pct": rel})
             except Exception:
-                rel = None
-            pcc = result[1] if fn.__name__ == "comp_pcc" else result[0]
-            _records["metrics"].append({"pcc": float(pcc) if pcc is not None else None, "rel_l2_pct": rel})
+                pass
             return result
 
         wrapped.__name__ = fn.__name__

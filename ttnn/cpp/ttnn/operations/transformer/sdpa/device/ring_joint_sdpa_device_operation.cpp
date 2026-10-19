@@ -395,6 +395,39 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
 }  // namespace
 
+std::optional<std::string_view> named_ring_recipe_gap(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    if (tensor_args.has_latent_v()) {
+        return "latent V (ring_mla)";
+    }
+    if (args.kv_stripe_split != 1) {
+        return "split KV";
+    }
+    if (args.has_sliding_window()) {
+        return "sliding window";
+    }
+    if (kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache) {
+        return "KV-pad rotation / circular KV cache";
+    }
+    if (tensor_args.attention_sink) {
+        return "attention sink";
+    }
+    const uint32_t head_dim = tensor_args.input_q.logical_shape()[3];
+    const uint32_t v_head_dim = tensor_args.input_v->logical_shape()[3];
+    if (tensor_args.input_k.logical_shape()[3] != head_dim || v_head_dim > head_dim ||
+        v_head_dim % tt::constants::TILE_WIDTH != 0) {
+        return "K/V head dims";
+    }
+    namespace recipes = ttnn::operations::transformer::sdpa::detail;
+    const auto policy = recipes::resolve_precision_policy(recipes::select_recipe(
+        args.precision.value_or(ttnn::transformer::SDPAPrecision::STANDARD), tensor_args.input_k.dtype()));
+    if (!recipes::named_ring_recipe_chunks_fit(
+            policy, args.get_q_chunk_size(), args.get_k_chunk_size(), head_dim, v_head_dim)) {
+        return "chunk geometry / program size";
+    }
+    return std::nullopt;
+}
+
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
@@ -615,13 +648,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool is_chunked = tensor_args.is_chunked(args.kv_stripe_split);
 
     const auto dtype = input_tensor_q.dtype();
-    if (args.precision && tensor_args.has_latent_v()) {
-        // ring_mla recipes run the ring_mla kernel itself; ring_mla() resolved the compute config.
-        using ttnn::transformer::SDPAPrecision;
-        TT_FATAL(
-            *args.precision == SDPAPrecision::STANDARD || *args.precision == SDPAPrecision::BALANCED ||
-                *args.precision == SDPAPrecision::FAST,
-            "ring_mla supports the STANDARD, BALANCED and FAST precision recipes");
+    const auto recipe_gap = args.precision ? named_ring_recipe_gap(args, tensor_args) : std::nullopt;
+    if (recipe_gap) {
+        // The recipe runs as a configuration of the streaming kernel (the program factory derives its numerics).
+        log_debug(tt::LogOp, "Ring SDPA {} recipe on the streaming kernel: {}", *args.precision, *recipe_gap);
     } else if (args.precision) {
         TT_FATAL(!tensor_args.has_latent_v(), "Named ring recipes require explicit K and V");
         // Split KV (ring_mla with Q sharded on fewer devices than K/V) packs several sources into one K chunk; the
@@ -1169,10 +1199,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     validate_runtime_patched_scalars(args, tensor_args);
 }
 
-// A precision recipe runs the named recipe kernels, except on ring_mla (latent V), whose recipes are fixed
-// configurations of the ring_mla kernel (sdpa.cpp ring_mla).
+// A precision recipe runs the named recipe kernels unless named_ring_recipe_gap names a feature they lack; then it runs
+// as a configuration of the streaming kernel (ring_joint_sdpa_program_factory.cpp).
 static bool uses_named_recipe_kernels(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    return args.precision.has_value() && !tensor_args.has_latent_v();
+    return args.precision.has_value() && !named_ring_recipe_gap(args, tensor_args);
 }
 
 RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(

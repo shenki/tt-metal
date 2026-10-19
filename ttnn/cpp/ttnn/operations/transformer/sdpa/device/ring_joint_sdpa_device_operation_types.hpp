@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -253,6 +254,13 @@ inline bool kv_pad_rotation_active(const RingJointSDPAParams& args, const RingJo
 inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     return args.has_indexed_kv_cache() || tensor_args.has_metadata();
 }
+
+// Why the named ring recipe kernels cannot run this precision call (nullopt: they can). Such calls run the recipe as a
+// fixed configuration of the streaming ring kernel instead (fp32 DEST; FP32 running state for BALANCED and
+// ACCURATE; LoFi matmuls for FAST), so every ring feature (latent V, split KV, sliding windows, KV-pad rotation,
+// attention sinks, any chunk pair) takes a recipe. Defined in ring_joint_sdpa_device_operation.cpp.
+std::optional<std::string_view> named_ring_recipe_gap(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
 // Index constants for RingJointSDPAResult vector
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
