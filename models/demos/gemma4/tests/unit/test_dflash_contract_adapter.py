@@ -1043,6 +1043,8 @@ def test_sampled_request_after_greedy_completion_uses_the_real_decode_contract(
     monkeypatch.setattr(model, "_clear_sequential_batch_page_tables", lambda: None, raising=False)
     monkeypatch.setattr(model, "mode", "prefill", raising=False)
     monkeypatch.setattr(model, "data_parallel", 1, raising=False)
+    monkeypatch.setattr(model, "_deferred_decode_sampling_failed", False, raising=False)
+    monkeypatch.setattr(model, "_pending_deferred_decode_sampling", None, raising=False)
     monkeypatch.setattr(model.model[0], "switch_mode", lambda mode: None, raising=False)
     monkeypatch.setattr(model, "_decode_forward_trace_text", trace, raising=False)
     monkeypatch.setattr(model, "sample_decode_on_device", sample, raising=False)
