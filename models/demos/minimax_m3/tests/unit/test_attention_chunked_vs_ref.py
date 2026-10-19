@@ -40,7 +40,7 @@ HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_
 NIDX, INDEX_DIM = 4, 128
 
 
-def _random_attention(mesh_device, is_sparse, total):
+def _random_attention(mesh_device, is_sparse, total, global_layer_idx=0):
     """One attention layer with random weights on the 8x4 mesh (TP on the columns), sized for ``total``
     positions; returns it with its rope tables."""
     rows, cols = tuple(mesh_device.shape)
@@ -113,7 +113,7 @@ def _random_attention(mesh_device, is_sparse, total):
         ccl_manager=ccl,
         mesh_config=mesh_config,
         program_config=MiniMaxM3AttentionProgramConfig(),
-        global_layer_idx=0,
+        global_layer_idx=global_layer_idx,
         transformation_mats=rope_setup.get_both_trans_mats(),
     )
     return attn, rope_setup
@@ -365,10 +365,12 @@ def test_attention_packed_segments(mesh_device, device_params, layer_kind, reset
     total = 2 * chunk  # per user: a cached chunk and the segment
     is_sparse = layer_kind == "sparse"
     users = [(0, chunk), (1, chunk), (2, 0)]  # (user, cached_len): two warm segments, one cold
+    layers, layer = 2, 1  # the cache has two layers and the test attends the second: a user-for-slot mix-up
+    # would land on layer 0's untouched slot instead of passing by coincidence
 
     torch.manual_seed(0)
     x = torch.randn(len(users), 2, chunk, HIDDEN) * 0.1  # per user: [the cached chunk, the segment]
-    attn, rope_setup = _random_attention(mesh_device, is_sparse, total)
+    attn, rope_setup = _random_attention(mesh_device, is_sparse, total, global_layer_idx=layer)
 
     in_dims = [None, None]
     in_dims[sp_axis] = 2
@@ -404,7 +406,7 @@ def test_attention_packed_segments(mesh_device, device_params, layer_kind, reset
         return torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)  # [1, 1, rows, H]
 
     def cache_slots(kvc):
-        # [chips, users*layers, heads, seq_local, hd] per cache: the slot dim indexes the users (one layer)
+        # [chips, users*layers, heads, seq_local, hd] per cache: the slot dim is user*layers + layer
         return [
             torch.stack(
                 [
@@ -429,7 +431,9 @@ def test_attention_packed_segments(mesh_device, device_params, layer_kind, reset
 
     def packed(overlap_on):
         monkeypatch.setattr(msa, "MSA_SEGMENT_OVERLAP", overlap_on)
-        kvc = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=len(users))
+        kvc = allocate_kv_caches(
+            mesh_device, num_layers=layers, max_seq_len=total, sp_axis=sp_axis, num_users=len(users)
+        )
         try:
             fill(kvc)
             natural = torch.cat([segment_rows(u, c) for u, c in users])  # [N*chunk, H], segment after segment
@@ -445,7 +449,7 @@ def test_attention_packed_segments(mesh_device, device_params, layer_kind, reset
     try:
         # Reference: every segment through the per-chunk entry point.
         kvc_ref = allocate_kv_caches(
-            mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=len(users)
+            mesh_device, num_layers=layers, max_seq_len=total, sp_axis=sp_axis, num_users=len(users)
         )
         try:
             fill(kvc_ref)
@@ -465,8 +469,9 @@ def test_attention_packed_segments(mesh_device, device_params, layer_kind, reset
             logger.info(f"[{layer_kind}] packed segment {i} (user {u}, cached {c}) vs per-chunk: pcc={pcc}")
             assert passing, f"{layer_kind} packed segment {i} differs from the per-chunk path: {pcc}"
         for name, a, b in zip(("k", "v", "index_k"), ref_caches, caches):
-            for u, _ in users:  # one check per (cache, user slot); a dense layer's index_k is zeros on both sides
-                passing, pcc = comp_pcc(a[:, u], b[:, u], 0.999)
+            for u, _ in users:  # one check per (cache, user); a dense layer's index_k is zeros on both sides
+                slot = layers * u + layer
+                passing, pcc = comp_pcc(a[:, slot], b[:, slot], 0.999)
                 assert passing, f"{layer_kind} packed forward wrote a different {name} cache for user {u}: {pcc}"
         if is_sparse:
             outs_off, caches_off = packed(False)
