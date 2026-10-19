@@ -19,6 +19,7 @@ from models.demos.common.prefill.runners.migration import (
     migration_file_export_enabled,
     migration_publish_enabled,
     migration_table_path,
+    publish_kv_page_pool,
     setup_kv_chunk_table,
 )
 from models.demos.common.prefill.runners.runner_utils import (
@@ -98,6 +99,7 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
+KV_POOL_HEADROOM_MB = int(os.environ.get("PREFILL_KV_POOL_HEADROOM_MB", 256))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
 DFLASH_MODEL = os.environ.get("DFLASH_HF_MODEL") or ADAPTER.dflash_model_default
@@ -420,6 +422,8 @@ def _compute_and_send(
     t_start = time.time()
     t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+    if not 0 <= meta["slot_id"] < runtime.config.num_users:
+        raise ValueError(f"[pp rank {rank}] {where} outside the {runtime.config.num_users} KV slots")
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
         f"provided={meta.get('provided_levels')}"
@@ -631,10 +635,11 @@ def main() -> None:
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
+    num_slots = num_ranks if ADAPTER.supports_kv_page_pool else NUM_USERS
     logger.info(
         f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
-        f"chunk_size={CHUNK_SIZE} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
+        f"chunk_size={CHUNK_SIZE} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS} num_slots={num_slots}"
     )
 
     mesh_device = open_mesh_device(
@@ -655,7 +660,7 @@ def main() -> None:
         is_last_rank=is_last_rank,
         max_seq_len=MAX_SEQ_LEN,
         chunk_size=CHUNK_SIZE,
-        num_users=NUM_USERS,
+        num_users=num_slots,
         capacity_factor=CAPACITY_FACTOR,
         num_links=2 if is_blackhole() else 1,
         gate_mode_name=_gate_mode_name,
@@ -678,8 +683,9 @@ def main() -> None:
         )
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
+    kv_page_pool = _allocate_kv_page_pool(mesh_device, params, kv_caches, rank, num_slots)
 
-    _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+    _serve_request(runtime, kv_caches, kv_page_pool, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
     _release_trace = getattr(runtime, "release_trace", None)
     if _release_trace is not None:
@@ -690,7 +696,31 @@ def main() -> None:
     logger.info(f"[pp rank {rank}] shutdown complete")
 
 
-def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+def _allocate_kv_page_pool(mesh_device, params, kv_caches, rank: int, num_slots: int):
+    if not ADAPTER.supports_kv_page_pool:
+        return None
+    free_bytes = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).largest_contiguous_bytes_free_per_bank
+    budget = max(0, free_bytes - KV_POOL_HEADROOM_MB * 1024 * 1024)
+    pool = ADAPTER.allocate_kv_page_pool(
+        mesh_device=mesh_device, params=params, kv_caches=kv_caches, budget_bytes_per_bank=budget
+    )
+    pool_users = pool.num_users if pool is not None else 0
+    logger.info(
+        f"[pp rank {rank}] KV page pool: {pool_users} users at max_seq_len={MAX_SEQ_LEN} + {num_slots} slots "
+        f"(free {free_bytes / 2**20:.1f} MiB/bank, headroom {KV_POOL_HEADROOM_MB} MiB)"
+        + (f", pages {', '.join(f'{k}={t.shape[0]}' for k, t in pool.pages.items())}" if pool is not None else "")
+    )
+    if num_slots + pool_users < NUM_USERS:
+        raise RuntimeError(
+            f"[pp rank {rank}] KV capacity {num_slots} slots + {pool_users} pool users < PREFILL_NUM_USERS="
+            f"{NUM_USERS} at max_seq_len={MAX_SEQ_LEN}"
+        )
+    return pool
+
+
+def _serve_request(
+    runtime, kv_caches, kv_page_pool, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool
+) -> None:
     d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
@@ -877,6 +907,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         first_layer_idx=first_layer_idx,
         num_my_layers=num_my_layers,
     )
+    if ADAPTER.supports_kv_page_pool:
+        publish_kv_page_pool(
+            kv_page_pool, mesh_device, GLOBAL_MESH_SHAPE, rank=rank, num_slots=runtime.config.num_users
+        )
 
     def _capture_trace() -> None:
         if d2d_out is not None:

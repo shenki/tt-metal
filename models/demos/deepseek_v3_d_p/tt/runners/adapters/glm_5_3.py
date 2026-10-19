@@ -50,6 +50,7 @@ class GLM53Adapter(MLAPrefillAdapter):
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True
+    supports_kv_page_pool = True
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
@@ -121,6 +122,35 @@ class GLM53Adapter(MLAPrefillAdapter):
             bank_aligned=True,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
+
+    def allocate_kv_page_pool(self, *, mesh_device, params, kv_caches, budget_bytes_per_bank):
+        from models.demos.common.prefill.adapter import KvPagePool
+        from models.demos.common.prefill.runners.migration import get_num_dram_banks
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import _dram_chunk_size_bytes
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kv_page_pool, kv_page_rows
+
+        caches = {"kvpe": kv_caches.kvpe.storage, "index": kv_caches.index}
+        page_rows = kv_page_rows(get_num_dram_banks(mesh_device))
+        pages_per_user = {
+            kind: (cache.shape[0] // params.num_users) * (cache.shape[2] // page_rows) for kind, cache in caches.items()
+        }
+        chunk_bytes = {kind: _dram_chunk_size_bytes(cache) for kind, cache in caches.items()}
+        bytes_per_user = sum(pages_per_user[kind] * chunk_bytes[kind] for kind in caches)
+        num_users = budget_bytes_per_bank // bytes_per_user
+        if num_users == 0:
+            return None
+        pages = {
+            kind: init_kv_page_pool(
+                cache.shape[-1],
+                mesh_device,
+                num_users * pages_per_user[kind],
+                dtype=cache.dtype,
+                layout=cache.layout,
+                tp_axis=params.tp_axis,
+            )
+            for kind, cache in caches.items()
+        }
+        return KvPagePool(pages=pages, chunk_bytes=chunk_bytes, num_users=num_users, page_rows=page_rows)
 
     def layer_split_boundaries(self, num_layers):
         """GLM-5.3 cross-layer reuse: a pipeline rank must start on a ``full`` layer (it seeds that
