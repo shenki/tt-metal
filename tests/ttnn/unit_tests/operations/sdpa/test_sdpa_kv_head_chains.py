@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Non-causal GQA SDPA keys its K/V forwarding chains by KV head at batch <= 4 (cores on the query heads of one KV head
-share its K/V) and by query head above. Chains only change where a core's K/V bytes come from, so both keys must give
-bit-identical rows, and the KV-head chains must hold up under masks, sinks, padded sequences, other head ratios and
-MLA's separate K and V heads."""
+"""Non-causal GQA SDPA keys its K/V forwarding chains by KV head while batch x KV heads is at most half the core count
+(cores on the query heads of one KV head share its K/V) and by query head above. Chains only change where a core's K/V
+bytes come from, so both keys must give bit-identical rows, and the KV-head chains must hold up under masks, sinks,
+padded sequences, other head ratios and MLA's separate K and V heads."""
 
 import pytest
 import torch
@@ -39,15 +39,17 @@ def _torch_ref(q, k, v, attn_mask=None):
     )
 
 
-# q chunks divide S, so the Q schedule (and Q-head crossing) is the same at batch 1 and batch 5
+# q chunks divide S, so the Q schedule (and Q-head crossing) is the same at batch 1 and the larger batch
 @pytest.mark.parametrize("grid", [(8, 8), (8, 7), (8, 4), (12, 10), (11, 10)])
 @pytest.mark.parametrize("q_chunk, k_chunk", [(128, 256), (256, 256), (256, 512)])
 @pytest.mark.timeout(600)
 def test_kv_head_chains_match_q_head_chains(device, grid, q_chunk, k_chunk):
-    """Batch 1 runs KV-head chains, batch 5 Q-head chains: every batch-5 row must equal its batch-1 run bit for bit."""
+    """Batch 1 runs KV-head chains, the smallest batch with more KV heads than half the cores Q-head chains: every
+    batched row must equal its batch-1 run bit for bit."""
     _skip_if_too_big(device, grid)
     torch.manual_seed(0)
-    b, nh, nkv, s, d = 5, 32, 8, 512, 128
+    nh, nkv, s, d = 32, 8, 512, 128
+    b = grid[0] * grid[1] // (2 * nkv) + 1
     q, k, v = (torch.randn(b, n, s, d) for n in (nh, nkv, nkv))
     batched = _sdpa(device, q, k, v, grid, q_chunk, k_chunk)
     for i in range(b):

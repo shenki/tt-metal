@@ -309,6 +309,20 @@ uint32_t kv_chain_key_q_heads(uint32_t nqh, uint32_t nkh, uint32_t nvh) {
     return hi % lo == 0 ? lo : 1;
 }
 
+// Q heads per K/V chain key without retention (several K chunks). A chain shares K/V only while its members run their
+// Q chunks of the key in step. Key by KV head while there are at most half as many keys (batch x KV heads) as cores:
+// each key's Q chunks then cover at least two whole cores, which start it together, and one DRAM read serves the GQA
+// group. With more keys a core holds parts of several keys but joins only one chain, and the members reach the key at
+// different points in their work, so unicast chains stall them; keep the Q-head key there. The ratio does not depend on
+// S or the Q chunk size. Blackhole, 32/8 and 32/4, S=512 and 2048, q128-512, grids 4x8 to 12x10: at <= 0.5 keys per
+// core the KV-head key was at most 0.4% slower and up to 55% faster than the Q-head key; above, at most 6% faster and
+// up to 65% slower.
+uint32_t kv_chain_key_q_heads_unretained(uint32_t B, uint32_t nqh, uint32_t nkh, uint32_t nvh, uint32_t num_cores) {
+    const uint32_t key_q_heads = kv_chain_key_q_heads(nqh, nkh, nvh);
+    const uint64_t keys = static_cast<uint64_t>(B) * (nqh / key_q_heads);
+    return 2 * keys <= num_cores ? key_q_heads : 1;
+}
+
 // K/V retention: with one K chunk, a core keeps K/V in its CBs across its consecutive Q chunks of one retention key
 // (batch, nq / group) instead of re-reading them; a chain member takes its copy on the first Q chunk of its segment and
 // forwards it once. The group is the finer of the K and V head groupings when one nests in the other (the K/V chain
@@ -1562,18 +1576,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Q chunks of a key. Blackhole 32/8 S=512 k512: chains win 1-14% at bs2-4 (DRAM), tie at bs8, and lose up to
     // 40% at bs16-32 (11x8, 12x10) and 13-14% at bs1 with L1-resident K/V and unicast chains.
     constexpr uint32_t kMaxRetainChainBatch = 8;
-    // KV-head chain key only up to this batch; see the key choice below.
-    constexpr uint32_t kMaxKvHeadChainKeyBatch = 4;
     const bool kv_in_l1 = input_tensor_k.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
                           input_tensor_v.buffer()->buffer_type() == tt::tt_metal::BufferType::L1;
     const bool retain_skips_chains = kv_retain != 0 && B > kMaxRetainChainBatch;
     if (!use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed && !retain_skips_chains) {
-        // With K/V retention the chains share its key, so a core's run of one key is one chain segment. Otherwise key
-        // them by KV head at B <= kMaxKvHeadChainKeyBatch, so one DRAM read of a KV head's K/V serves its whole GQA
-        // group (11-46% faster at bs2-4, Blackhole). From B = 8 the KV-head key gains nothing at q128/q256 and loses at
-        // q512 (+23-27% at bs8-32), where it only adds short unicast chains, so keep the Q-head key there.
+        // With K/V retention the chains share its key, so a core's run of one key is one chain segment.
         const uint32_t key_q_heads =
-            kv_retain != 0 ? kv_retain : (B <= kMaxKvHeadChainKeyBatch ? kv_chain_key_q_heads(NQH, NKH, NVH) : 1);
+            kv_retain != 0 ? kv_retain : kv_chain_key_q_heads_unretained(B, NQH, NKH, NVH, num_cores);
         KvChains chains = build_kv_chains(
             device,
             grid_size,

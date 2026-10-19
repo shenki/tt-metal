@@ -153,8 +153,8 @@ void kernel_main() {
     uint32_t next_core_q_chunks = 0;
     uint32_t mcast_num_dests = 0;
     uint32_t mcast_sender_wait = 0;
-    // Chains are keyed by (batch, nq / chain_key_q_heads): one KV head under GQA (at B <= 4), so the K/V a whole GQA
-    // group shares is read from DRAM once. chain_head holds the key.
+    // Chains are keyed by (batch, nq / chain_key_q_heads): one KV head under GQA (while the factory picks that key), so
+    // the K/V a whole GQA group shares is read from DRAM once. chain_head holds the key.
     uint32_t chain_key_q_heads = 1;
 
     // Initialize NOC/semaphore state for chain forwarding
