@@ -175,10 +175,12 @@ def test_kimi_k3_recipe(n_chunks, offset, variant):
         x.start()
     try:
         RECORDS.clear()
-        with mock.patch.dict(os.environ, {T.CHUNKED_PREFILL_CHUNK_ID_ENV: str(final)}):
-            T.run_ring_joint_sdpa_chunked(MC, model, pcc_threshold=0.0, kv_mean_offset=offset, **common)
-        p, r, rel, finite = RECORDS[-1]
-        status = "ok" if finite else "non-finite"
+        # RING_SDPA_COMPUTE_ONLY outputs are garbage by design: skip the reference and only profile.
+        if os.environ.get("RING_SDPA_COMPUTE_ONLY") != "1":
+            with mock.patch.dict(os.environ, {T.CHUNKED_PREFILL_CHUNK_ID_ENV: str(final)}):
+                T.run_ring_joint_sdpa_chunked(MC, model, pcc_threshold=0.0, kv_mean_offset=offset, **common)
+            p, r, rel, finite = RECORDS[-1]
+            status = "ok" if finite else "non-finite"
         if offset == OFFSETS[0]:  # perf does not depend on the values
             runtime = T.open_ring_joint_sdpa_runtime(MC)
             try:
