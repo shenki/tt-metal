@@ -171,13 +171,13 @@ scripts/run_safe_pytest.sh --run-all $T::test_mla_chunked_prefill -k "torus-xy-8
    `L10 and mid15k and tp_sharded`, traced and untraced) and the K3 transformer test, with the prefetch on. The
    transformer forwards the trace controller to MLA (`TtPrefillBlock`, and now the K3 block).
 3. **CI (X8):** run the Blaze prefill legs on this branch, i.e. the PR's K2.7/K3 `tp_sharded` `maxedge` legs and the
-   K2.7 transformer legs. Update `K3_CHUNKED_RT_PERF_NS`: `test_mla_chunked_perf_check` still has main's 10.556 ms
-   target, while this branch measures ~7.66 ms on `sp_only`.
+   K2.7 transformer legs. The Kimi perf gates are re-baselined for TorusXY with expanded K on (see
+   [../expanded_k/STATUS.md](../expanded_k/STATUS.md), E5).
 4. **Rebase onto main once PR #59531 merges,** dropping the merge commit.
 5. **Expanded K on arrival (PLAN.md §6): done**, on by default for Kimi since Phase 4 (`ttMLA(expanded_k=False)`
    turns it off).
    Steady-state MLA forward vs absorbed unrolled-V: −20.7% to −25.1% at the four points; K3 512k is 47% faster than
-   main's `ring_mla`. Status, remaining work (the E5 regression set on the new default) and evidence:
+   main's `ring_mla`. Phase 4 is closed (E5 passes on the new default). Status and evidence:
    [../expanded_k/STATUS.md](../expanded_k/STATUS.md).
 6. **Upstream bits worth splitting out as separate PRs:**
    - `high_bw_all_gather` `outer_block_rows` (useful on its own);

@@ -527,7 +527,9 @@ DETERMINISM_REPS = 3
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 10_556_000
+# Measured 2026-10-18 on the TorusXY Galaxy (DDR 14000) with expanded K default-on for Kimi, median of 3:
+# 6.359 / 6.368 / 6.377 ms.
+K3_CHUNKED_RT_PERF_NS = 6_368_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
@@ -2480,8 +2482,8 @@ def test_tp_latent_prefetch_chain_stop_layer(monkeypatch, kv_only_last_layer):
 
 class _SdpaRecorder:
     """Wraps ttnn.transformer.ring_joint_scaled_dot_product_attention (eager tests only) and keeps, per call, whether K
-    was expanded, the Q chunk size, the scale, and per-device host copies of the output (and, with keep_inputs, of Q, the
-    latent K, V and W_UK). Device lists are in mesh order: index sp * tp_size + tp."""
+    was expanded, the Q chunk size, the matmul fidelity, the scale, and per-device host copies of the output (and, with
+    keep_inputs, of Q, the latent K, V and W_UK). Device lists are in mesh order: index sp * tp_size + tp."""
 
     def __init__(self, monkeypatch, keep_inputs=False, keep_device_rows=None):
         self.calls = []
