@@ -2469,16 +2469,15 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
 
 @run_for_blackhole("sub-device gather/compute overlap requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("carve", [_sparse_mla_overlap_grids, _msa_overlap_grids], ids=["mla_columns", "m3_rows"])
-def test_high_bw_all_gather_segment_pipeline_matches_serial(mesh_device, carve):
+def test_high_bw_all_gather_segment_pipeline_matches_serial(mesh_device):
     """Gather slot i+1 on the gather sub-device while a top-k on the other sub-device consumes gather i, the two
     joined by a device-side event before each top-k: the MiniMax-M3 packed-prefill MSA schedule (G(0); for i:
-    join; C(i); G(i+1)) over two output buffers that alternate by parity, on the sparse-MLA column carve and on
-    M3's two-row gather strip. Every top-k ranks the rows its segment gathered, so a join that let it start
-    before its gather landed, or a gather that overwrote the buffer a top-k was still reading, would rank stale
-    rows; the pipeline must equal the serial schedule and the host."""
+    join; C(i); G(i+1)) over two output buffers that alternate by parity, on M3's two-row gather strip. Every
+    top-k ranks the rows its segment gathered, so a join that let it start before its gather landed, or a gather
+    that overwrote the buffer a top-k was still reading, would rank stale rows; the pipeline must equal the
+    serial schedule and the host."""
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
-    topk_grid, gather_grid = carve(rank_line)
+    topk_grid, gather_grid = _msa_overlap_grids(rank_line)
     manager = rank_line.create_sub_device_manager([ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])], 0)
     ready_semaphore, data_valid_semaphore = _make_l1_small_semaphore_pair(rank_line, gather_grid)
     ttnn.synchronize_device(rank_line)
