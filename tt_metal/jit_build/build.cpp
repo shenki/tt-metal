@@ -836,7 +836,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
-    if (!pch.empty()) {
+    if (!pch.empty() && !env_.get_rtoptions().get_build_map_enabled()) {
         // Load the PCH before any other force-included header emits C++ tokens.
         defines.insert(defines.begin(), {"-include", pch});
         // Warn if GCC rejects the PCH, while allowing textual fallback.
