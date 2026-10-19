@@ -103,7 +103,7 @@ class Attention:
             kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k). ``user_id`` is the
                 cache slot, ``self.local_layer_idx`` the (local) layer, ``cached_len`` the prior-prefix length.
             user_id: User/batch index; also the cache slot index (default: 0).
-            segments: packed forward: list of (slot, cached_len), one per equal row block of hidden_states;
+            segments: packed forward: list of (user, cached_len), one per equal row block of hidden_states;
                 attention runs per segment and ``user_id`` / ``cached_len`` are not read.
 
         Returns:

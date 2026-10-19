@@ -526,9 +526,9 @@ class TtPrefillRuntime:
 
     def prefill_segments(self, input_tensor: ttnn.Tensor, kv_cache, segments: list, request_id: int = 0):
         """Packed prefill: ONE forward over ``chunk_size // segment_size`` segments, each
-        ``(slot, cached_len, n_real)``. The layer norms, the fused QKV projection and the MoE run once on the
+        ``(user, cached_len, n_real)``. The layer norms, the fused QKV projection and the MoE run once on the
         packed rows; the head split, QK-norm, RoPE, the index branch (its projections included), the KV and
-        index_k writes, the SP gathers, indexer, top-k and SDPA run per segment against that segment's slot at
+        index_k writes, the SP gathers, indexer, top-k and SDPA run per segment against that user's cache at
         its cached_len. Returns what prefill_chunk returns (None on a last rank, the hidden state otherwise).
         ``request_id`` mirrors prefill_chunk's and is unread: no layer-completion sink can be bound on a packed
         runtime (class docstring)."""
@@ -536,8 +536,8 @@ class TtPrefillRuntime:
         seg, sp = cfg.seg, cfg.sp_factor
         assert self.model_built, "build the model before prefill_segments()"
         assert len(segments) * seg == cfg.chunk_size, f"{len(segments)} segments x {seg} != chunk_size {cfg.chunk_size}"
-        for slot, cached_len, n_real in segments:
-            assert 0 <= slot < cfg.num_users, f"slot {slot} out of range [0, {cfg.num_users})"
+        for user, cached_len, n_real in segments:
+            assert 0 <= user < cfg.num_users, f"user {user} out of range [0, {cfg.num_users})"
             assert cached_len % seg == 0, f"cached_len={cached_len} must be a multiple of the segment size {seg}"
             assert cached_len + seg <= cfg.max_seq_len, f"segment at {cached_len} exceeds the cache {cfg.max_seq_len}"
             assert 0 < n_real <= seg, f"n_real={n_real} not in (0, {seg}]"
@@ -553,7 +553,7 @@ class TtPrefillRuntime:
             skip_lm_head=True,
             kv_cache=kv_cache,
             actual_isl=None if counts is None else tuple(counts),
-            segments=[(slot, cached_len) for slot, cached_len, _ in segments],
+            segments=[(user, cached_len) for user, cached_len, _ in segments],
         )
 
     def set_layer_completion_sink(self, sink) -> None:

@@ -46,7 +46,8 @@ class MiniMaxKVCache(KvCaches):
     index_k_tp_axis: Optional[int] = None  # None = index_k TP-replicated; else the mesh axis it is deduped over
 
     def slot(self, user: int, layer_idx: int) -> int:
-        """Batch index of (user, layer) in the three caches."""
+        """Batch index of (user, layer) in the three caches: the ``slot`` msa.py's cache reads take. The
+        runner's per-request slot (``read_slot_kv``, ``prefill_segments``) is ``user`` here."""
         return user * self.num_layers + layer_idx
 
     def deallocate(self) -> None:

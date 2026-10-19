@@ -472,7 +472,7 @@ class Model:
         actual_isl: real (non-pad) tokens in this chunk across the SP axis, None for a full chunk, or, for a
         packed forward, a tuple of per-SP-chip leading-real-row counts (prefill_segments). Only the MoE layers
         read it, to bound the gate/dispatch padding config (tt/topk.py).
-        segments: packed forward — list of (slot, cached_len), one per equal row block; attention runs per
+        segments: packed forward — list of (user, cached_len), one per equal row block; attention runs per
         segment, everything else once. None (default) = one chunk for user_id at cached_len.
         """
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)

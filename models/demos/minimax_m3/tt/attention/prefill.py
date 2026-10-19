@@ -74,7 +74,7 @@ def attention_forward(
         layer_idx: this layer's index, for the per-layer cache write
         cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
             >0 selects the cache-read attention paths (current chunk attends the accumulated prefix).
-        segments: packed forward — list of (slot, cached_len), one per equal row block of hidden_states.
+        segments: packed forward — list of (user, cached_len), one per equal row block of hidden_states.
             None (default) = one chunk for ``user_id`` at ``cached_len``.
 
     Returns:
