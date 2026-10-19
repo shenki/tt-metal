@@ -805,9 +805,9 @@ MLA_SDPA_CONFIG = {
 #     without one keeps absorbed K.
 MLA_ATTENTION_CONFIG = [
     # Kimi-K2.7 (and K2.6): 64 heads.
-    {"num_heads": 64, "q_lora_rank": 1536, "chunked_only": True, "unrolled_v": True},
+    {"num_heads": 64, "q_lora_rank": 1536, "chunked_only": True, "unrolled_v": True, "expanded_k": True},
     # Kimi-K3: 96 heads.
-    {"num_heads": 96, "q_lora_rank": 1536, "chunked_only": True, "unrolled_v": True},
+    {"num_heads": 96, "q_lora_rank": 1536, "chunked_only": True, "unrolled_v": True, "expanded_k": True},
 ]
 
 

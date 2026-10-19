@@ -3,7 +3,9 @@
 Milestone: Phases 1 and 2 of [PLAN.md](PLAN.md). In Phase 1 every core expands its head's K itself; in Phase 2 the
 two cores of each head pair split the expansion and exchange their halves. Branch
 `pjosipovic/unrolled-v-tp-sharded-kv`. Last updated 2026-10-18. Everything was measured on one Blackhole Galaxy 8×4
-(TorusXY, high-power host). The feature is off by default: `ttMLA(expanded_k=True)` turns it on.
+(TorusXY, high-power host). **On by default (Phase 4, author decision 2026-10-18)** wherever a measured schedule exists
+(Kimi K2.7 / K3, 5k and 2k chunks); other models and shapes keep absorbed K silently. `ttMLA(expanded_k=False)` turns
+it off, and `=1` also warns when it cannot apply.
 
 ## What it does
 
@@ -45,7 +47,7 @@ The rest of the change:
 | E2 | MLA PCC vs CPU reference ≥ absorbed − 0.001; `tp_sharded` == `sp_only` bitwise | ◐ | Asserted directly (the harness's `return_pccs`); over 40 user-runs, expanded is at worst 3e-6 below absorbed and at best 3.4e-5 above. `test_mla_expanded_k_matches_absorbed` (rot-multislab, rot_partial, maxedge-1u × K2.7 / K3 × scalar / metadata × `sp_only` / `tp_sharded`): 24/24 pass. With `return_outputs`, the harness runs its per-iteration 0.98 checks but not the full-region and KV-cache comparisons; the full-region PCC is returned (`return_pccs`) and compared. Expanded vs absorbed: output PCC ≥ 0.99979 (gate 0.999), and per (device, head) SDPA output PCC ≥ 0.999. `tp_sharded` == `sp_only` bitwise with expanded K: 56/56 functional scenarios. The full CPU matrix is not run yet. **Model level, Phase 2 kernel, with weights:** K3 golden trace (KIMI_K3_HF_MODEL, 14 passed per mode), full measured output PCC 0.999579 expanded vs 0.999524 absorbed (within PLAN's 0.001; expanded is higher); X2 golden bitwise 4/4. K2.7 transformer `test_kimi_prefill_transformer_chunked_padded` (L10, mid15k, `tp_sharded`, prefetch on, traced and untraced): both pass; over 54 per-layer decoder checks min PCC 0.994921 expanded vs 0.995063 absorbed (−0.00014), min nPCC 0.997048 vs 0.996934, KV cache min PCC 0.994869 vs 0.994724. K3 `kimi_k3/test_chunked_prefill.py` L5 (11 chunks of 5k to 56k vs golden, mesh fabric, `sp_only` and `tp_sharded`): both pass in both modes; the MLA layer's PCC at 56k is 0.995014 expanded vs 0.995034 absorbed, the worst layer 0.993055 vs 0.992996, KV slot identical (lora 0.997860, rope 0.996174). Same test at L24 (6 MLA layers): both layouts pass in both modes; worst layer at 56k is L19 in both, 0.980685 expanded vs 0.980931 absorbed (−0.00025); per-MLA-layer KV PCC within 2e-4. K3 transformer `test_kimi_k3_prefill_transformer_chunked` (L24, 11 chunks, traced, expanded): passes; it compares only the KV cache with the golden (no output PCC), min 0.994524 (absorbed not rerun; CI's leg). In these model-level runs the mode is set by `ttMLA(expanded_k)` and recorded only in the log names; no "ignored" warning fired, and expanded and absorbed numbers differ. **Phase 2:** X2 `expanded_k` bitwise `tp_sharded` == `sp_only` 36/36 (rot, maxedge, fullchunk) |
 | E3 | ≥ 15% faster at K3 512k / K2.7 256k, ≥ 8% at 50k; SDPA compute-bound | ◐ | **Timing met.** Phase 2, steady-state traced, `sp_only` vs absorbed: K3 512k −23.8%, K2.7 256k −25.1%, K3 50k −20.7%, K2.7 50k −22.7%; `tp_sharded` with the prefetch is within ±1% of `sp_only` (table below), one run each. **Ring vs compute, partly measured:** the ring K+V gather run alone (same ring and links, no compute, no contention) takes 22.65 ms at K3 512k and 8.20 ms at K2.7 256k, 53% and 56% of the expanded SDPA program (42.35 / 14.74 ms, below). The gather alone is about half the fused program's elapsed time (which itself includes any exposed waits), but this does not prove it is hidden inside the fused program; per-RISC wait time is still not split out, so this part of E3 stays open. The SDPA program (realtime profiler) drops 17–18% when only its matmuls go to LoFi (K3 512k 42.35 → 34.86 ms, K2.7 256k 14.74 → 12.18 ms, one run each), so compute is on the critical path and the program is not ring-gather-bound. It does not separate exposed exchange or gather waits from compute (LoFi also speeds the expansion). Method: `test_mla.py`'s profile mode with `num_cache_layers=3`, `ttMLA.sdpa_matmul_fidelity` set to LoFi after construction (a local scratch harness) |
 | E4 | Multi-layer trace with distinct weights | ◐ | X4 `expanded_k` (K2.7, K3): 3 layers with distinct per-layer `kv_b`, 2 users, a segmented capture with the prefetch, allocation tracking. Traced == eager == `sp_only`, bitwise: 4/4 with absorbed. All three paths are expanded, so X4 would not see a stale weight address; `test_mla_expanded_k_distinct_layer_weights` checks that. Prefetch off is not traced yet. **Phase 2:** X4 4/4 with allocation tracking |
-| E5 | Absorbed path unchanged, selectable | ◐ | Off by default. Absorbed X2 subset (rotated scenarios, both variants and paths): 24/24 bitwise. The Phase 3 prefetch test passes on the same build; X4 `absorbed` passes (with per-layer weight scaling added for E4) |
+| E5 | Absorbed path unchanged, selectable | ◐ | Selectable with `ttMLA(expanded_k=False)` (default on since Phase 4; E5 regression set on the new default pending). Absorbed X2 subset (rotated scenarios, both variants and paths): 24/24 bitwise. The Phase 3 prefetch test passes on the same build; X4 `absorbed` passes (with per-layer weight scaling added for E4) |
 | E6 | Two reviews per commit | ✅ | Every expanded-K code and doc commit, Phase 1 (`c19695fd7b5`) and Phase 2 (`69f2c38e874`) through `3124e893b07`, reviewed by both; findings fixed or answered in `reviews/`. The final commit only adds the last review's log |
 
 ## Accuracy (E2)
@@ -174,6 +176,19 @@ Measured at the author's request, as input for optimisation, not as a gate.
    - K2.7 256k: q320 / k256 / 3 splits 16.55 ms; k128 / 3 splits 18.72; k256 / 2 splits 22.61.
 
    Model-level runs with weights are done (E2): K3 golden trace, K3 chunked prefill L5 and L24, K3 traced
-   transformer L24, K2.7 transformer. Still to do: head groups of 4 (other schedules); K3 `test_transformer_depth`
-   L24 (CI).
-5. Phase 4: default on for Kimi (E5 regression set), docs.
+   transformer L24, K2.7 transformer. K3 `test_transformer_depth` L24 passes in both modes with identical numbers
+   (worst layer 0.98587, bar 0.98): it runs non-chunked attention, which expanded K does not touch.
+   **Head groups of 4: dropped (author, 2026-10-18).** Today's schedules use pairs, and groups of 4 would only help
+   4-Q-chunk-per-head schedules that neither Kimi model runs.
+5. Phase 4 (open until E5 passes): **default on for Kimi** (author, 2026-10-18), with 2k-chunk schedules from a 512k
+   HiFi2 sweep (K3 q128 / k256 / 2, K2.7 q128 / k256 / 3). Still to do: the E5 regression set on the new default.
+6. The unrolled-V accuracy gap against main's `ring_mla` (0.001 on K2.7 to 0.005 on K3, found in the perf matrix) is
+   fixed: the V expansion accumulates in fp32 (`71e49173813`), at HiFi2 (`44efae7f0a1`; HiFi4 gave the same PCC).
+   CPU reference, 10k prefix + two 5k chunks, HiFi2 SDPA, expanded KV: K3 0.99322 → 0.99828 (main 0.99805), K2.7
+   0.99637 → 0.99751 (main 0.99738). 512k forward against bf16 accumulation: K3 47.06 → 47.15 ms (+0.2%), K2.7
+   31.77 → 31.78 ms. bf8 storage of V was not the cause, so `ring_joint` needs no mixed-dtype support.
+7. Perf targets now stale with expanded K on by default (K3 shapes at 640 rows per chip):
+   - Galaxy: `K3_CHUNKED_RT_PERF_NS` (`test_mla.py`) and `perf/test_mla_perf.py`'s K3 / K2.7 targets. Re-baselining
+     here.
+   - LoudBox / QuietBox: `kimi_k3/test_mla_perf.py` `PERF_TARGETS`. These need re-measuring on those boxes; this
+     Galaxy can't.

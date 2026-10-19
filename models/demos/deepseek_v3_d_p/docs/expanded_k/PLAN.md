@@ -22,7 +22,7 @@ ring, and V stays unrolled as today.
 | E2 | MLA with expanded K: output PCC vs the CPU reference ≥ the absorbed path's PCC − 0.001 on every `test_mla_chunked_prefill` cpu scenario; K3 golden-trace PCC within 0.001 of absorbed. `tp_sharded` == `sp_only` bitwise with expanded K, as parent X2 | Paired tests |
 | E3 | Steady-state traced MLA forward (parent X5 method) ≥ 15% faster than absorbed unrolled-V at K3 512k and K2.7 256k, ≥ 8% at the 50k points, both layouts, prefetch on. The realtime profiler shows the SDPA compute-bound (the ring gather below the compute) | Perf test + profiler split |
 | E4 | Multi-layer captured trace with distinct per-layer weights, prefetch on and off, replays bitwise equal to eager; allocation tracking clean | Trace test |
-| E5 | The absorbed path is unchanged and selectable (`ttMLA(expanded_k=False)`); all existing MLA, op and parent X2–X6 tests pass | Regression runs |
+| E5 | The absorbed path is unchanged and selectable (`ttMLA(expanded_k=False)`); all existing MLA, op and parent X2–X6 tests pass. Exception: the V-expansion precision change (`71e49173813`, parent PLAN G5) also changes absorbed numerics, deliberately | Regression runs |
 | E6 | Every commit reviewed by Claude Code and Codex gpt-6-astra; findings fixed or answered | `reviews/<sha>.md` |
 
 **Stop and re-plan if** Phase 1's in-situ expansion throughput (MAC/s, from the profiler) is below 60% of the QK
@@ -204,7 +204,7 @@ row's multicast to its pairs' exchanges.
 | 1 | Q/K width split (§3.1); `k_expand_weight` with every core expanding its whole head (§3.2–3.3); L1 plan at k256/k512; in-situ expansion MAC/s from the profiler | E1 on both shapes (independent mode); throughput ≥ 60% of QK, else stop (waived, §0) |
 | 2 | Head-group exchange (§3.4) | E1 in group mode; per-core work drops as §1 |
 | 3 | MLA integration behind `ttMLA(expanded_k)` (default off); chunk retune; perf | E2, E3, E4 |
-| 4 | Default on for Kimi if E3 holds; docs | E5, E6 |
+| 4 | Default on for Kimi if E3 holds; docs (default switched on 2026-10-18; the phase closes when E5 passes on the new default) | E5, E6 |
 
 Every commit gets the two reviews (E6).
 

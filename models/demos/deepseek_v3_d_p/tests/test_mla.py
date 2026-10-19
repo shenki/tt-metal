@@ -7,6 +7,7 @@ chunked perf gate. ``run_mla_inference`` is the shared single-shot forward helpe
 tests/test_kv_cache_table.py and tests/sparse_mla/test_sparse_mla.py.
 """
 
+import functools
 import math
 import os
 import re
@@ -606,6 +607,7 @@ def _run_chunked_prefill(
     trace_time=False,
     poison_tp_latent_slot=False,
     num_cache_layers=1,
+    valid_rows=None,
     mla_kwargs=None,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
@@ -619,7 +621,9 @@ def _run_chunked_prefill(
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
-    mla_kwargs: extra ttMLA arguments, e.g. tp_latent_prefetch.
+    valid_rows: if a list, gets one [sp, chunk_local] bool mask per forward, in forward order: which chip-local
+    rows carry real tokens (the rest are padding, whose outputs are discarded).
+    mla_kwargs: extra ttMLA arguments, e.g. expanded_k / tp_latent_prefetch.
     """
     assert reference in ("cpu", "trace", None), f"reference must be 'cpu'|'trace'|None, got {reference!r}"
     # Mutually exclusive like determinism_check vs pcc_validation in test_prefill_block: a reference
@@ -732,7 +736,10 @@ def _run_chunked_prefill(
             ref_out, ref_kvpe = cpu_mla_reference(config, weights, hidden)
         else:  # None -> functional / perf, no reference
             torch.manual_seed(100 + u)
-            hidden = torch.randn(total_len, hidden_size, dtype=torch.bfloat16)
+            # Random rows only past the prefix: a 512k prefix would otherwise draw ~3.8G values on the host (about two
+            # minutes). Gathered positions are all >= kv_actual >= prefill_len, so the zero prefix rows are never read.
+            hidden = torch.zeros(total_len, hidden_size, dtype=torch.bfloat16)
+            hidden[prefill_len:] = torch.randn(total_len - prefill_len, hidden_size, dtype=torch.bfloat16)
             ref_out, ref_kvpe = None, None
 
         if prefill_len == 0:
@@ -866,6 +873,8 @@ def _run_chunked_prefill(
             gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
             chunk_in = users[u]["hidden"][gather_idx].clone()
             chunk_in[torch.tensor([gp >= valid_end for gp in flat])] = 0.0
+            if valid_rows is not None:
+                valid_rows.append(torch.tensor([gp < valid_end for gp in flat]).reshape(sp, chunk_local))
 
             tt_h = ttnn.from_torch(
                 chunk_in.reshape(1, 1, chunk_size_global, hidden_size),
@@ -1918,13 +1927,17 @@ _X4_STEPS = [(0, 0), (1, 0), (0, 5120), (0, 10240), (1, 2560), (0, 15360), (1, 7
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
 @pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
+@pytest.mark.parametrize("chunk", [5120, 2048], ids=["c5k", "c2k"])
 @pytest.mark.timeout(0)
-def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_params, variant, expanded_k, monkeypatch):
+def test_mla_tp_sharded_trace_replay_multi_layer(
+    request, mesh_device, device_params, variant, expanded_k, chunk, monkeypatch
+):
     # Expanded K (docs/expanded_k/PLAN.md E4): every layer passes its own wkv_b1 as the in-kernel K weight.
     config, weights = request.getfixturevalue("random_weights")
     sp_axis, tp_axis = 0, 1
     mesh_shape = tuple(mesh_device.shape)
-    chunk = 5120
+    # _X4_STEPS is written for 5k chunks; scale its starts so 2k chunks keep the same long/short/rotated pattern.
+    x4_steps = [(user, start * chunk // 5120) for user, start in _X4_STEPS]
     seq_len_cache = 4 * chunk
     config.max_seq_len = seq_len_cache
     num_layers, num_users = 3, 2
@@ -2047,7 +2060,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
     # Eager reference on a fresh cache.
     eager = []
     cache_eager = new_cache()
-    for step, (user, start) in enumerate(_X4_STEPS):
+    for step, (user, start) in enumerate(x4_steps):
         set_step(user, start)
         poison(step)
         outs = forward_all(cache_eager, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
@@ -2059,7 +2072,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
     # intermediate buffers and be overwritten by a later replay.
     cache_sp = new_cache(tp_sharded=False)
     tt_hidden = [to_device(host_hidden(0, layer)) for layer in range(num_layers)]
-    set_step(*_X4_STEPS[0])
+    set_step(*x4_steps[0])
     # Compile the sp_only programs now too (writing step 0's rows of the replicated cache, as its pass will again), so
     # nothing is compiled -- kernel binaries are allocated -- while the trace is alive.
     for mla_layer in layers:
@@ -2090,7 +2103,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
 
     def replay(steps, poison_base):
         for step in steps:
-            user, start = _X4_STEPS[step]
+            user, start = x4_steps[step]
             set_step(user, start)
             for layer in range(num_layers):
                 ttnn.copy_host_to_device_tensor(
@@ -2110,13 +2123,13 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
                 )
 
     try:
-        replay(range(len(_X4_STEPS)), poison_base=100)
+        replay(range(len(x4_steps)), poison_base=100)
 
         # The same steps eagerly on the TP-replicated cache: the TP-sharded layer and cache indexing must give the same
         # output.
         for mla_layer in layers:
             mla_layer.set_tp_shard_kv(False)
-        for step, (user, start) in enumerate(_X4_STEPS):
+        for step, (user, start) in enumerate(x4_steps):
             set_step(user, start)
             outs = forward_all(cache_sp, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
             for layer in range(num_layers):
@@ -2134,7 +2147,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
         # runtime arguments) and then the same capture replayed again must still match.
         for mla_layer in layers:
             mla_layer.set_tp_shard_kv(True)
-        for step, (user, start) in enumerate(_X4_STEPS):
+        for step, (user, start) in enumerate(x4_steps):
             set_step(user, start)
             poison(300 + step)
             outs = forward_all(cache_eager, [to_device(host_hidden(step, layer)) for layer in range(num_layers)])
@@ -2145,7 +2158,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
                 ), f"eager tp_sharded after sp_only: step {step} layer {layer}"
             for out in outs:
                 ttnn.deallocate(out)
-        replay(range(len(_X4_STEPS)), poison_base=200)
+        replay(range(len(x4_steps)), poison_base=200)
         assert (
             mesh_device.num_program_cache_entries() == program_entries
         ), "a program compiled while the trace was alive"
@@ -2167,9 +2180,9 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
     nat_eager, nat_traced, nat_sp = natural(cache_eager, True), natural(cache_traced, True), natural(cache_sp, False)
     assert torch.equal(nat_traced, nat_eager), "traced and eager TP-sharded caches differ"
     assert torch.equal(nat_sp, nat_eager), "TP-replicated and TP-sharded caches differ"
-    # Every slot is written, and rows past user 1's extent (12800) are written only in user 0's slots (user 0 writes to
-    # 20480): a transposed (layer, user) slot mapping would put user 0's rows into a user-1 slot.
-    user1_end = max(start for user, start in _X4_STEPS if user == 1) + chunk
+    # Every slot is written, and rows past user 1's extent (12800 at 5k chunks) are written only in user 0's slots
+    # (user 0 writes to 20480): a transposed (layer, user) slot mapping would put user 0's rows into a user-1 slot.
+    user1_end = max(start for user, start in x4_steps if user == 1) + chunk
     for user in range(num_users):
         for layer in range(num_layers):
             slot = user * num_layers + layer
@@ -2177,7 +2190,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_pa
             tail = nat_eager[slot, user1_end:].abs().sum()
             assert (tail == 0) == (user == 1), f"user {user} layer {layer}: rows past {user1_end} in the wrong slot"
     logger.success(
-        f"✓ traced replay == eager (tp_sharded) == eager (sp_only), outputs and caches bitwise, over {len(_X4_STEPS)} "
+        f"✓ traced replay == eager (tp_sharded) == eager (sp_only), outputs and caches bitwise, over {len(x4_steps)} "
         f"steps x {num_layers} layers, replayed again after the sp_only pass"
     )
 
@@ -2507,9 +2520,45 @@ class _SdpaRecorder:
         monkeypatch.setattr(ttnn.transformer, "ring_joint_scaled_dot_product_attention", recorded)
 
 
-def _per_head_pccs(a, b):
-    """PCC per (device, head) of two per-device [1, heads, rows, dim] output lists."""
-    return [comp_pcc(x[0, h], y[0, h])[1] for x, y in zip(a, b) for h in range(x.shape[1])]
+def _per_head_pccs(a, b, valid):
+    """PCC per (device, head) of two per-device [1, heads, rows, dim] output lists, over the rows that carry real tokens
+    (valid: an [sp, rows] bool mask; devices in mesh order sp * tp_size + tp). Devices with none are skipped."""
+    assert len(a) % valid.shape[0] == 0, f"{len(a)} devices vs {valid.shape[0]} SP rows"
+    tp_size = len(a) // valid.shape[0]
+    rows = [valid[d // tp_size] for d in range(len(a))]
+    return [comp_pcc(x[0, h, r], y[0, h, r])[1] for x, y, r in zip(a, b, rows) if r.any() for h in range(x.shape[1])]
+
+
+@pytest.mark.parametrize(
+    "kv_actual,isl,real_sp",
+    [(10176, 32, [7]), (1280, 1920, [2, 3, 4])],
+    ids=["padoverflow-final", "rot_partial-iter1"],
+)
+def test_mla_per_head_pccs_real_rows(kv_actual, isl, real_sp):
+    """Host only: the real-row mask ignores padding (so a device mapped to the wrong SP row fails), compares every head
+    of every device with real rows, and still catches an error in any one of them. Masks follow the pad-overflow final
+    chunk (32 real tokens on SP 7) and the rot_partial rotated partial chunk (SP 2-4) on an 8 x 4 mesh, 640 rows per
+    chip."""
+    sp, tp, heads, rows = 8, 4, 3, 640
+    positions = rotated_chip_positions(kv_actual, sp, rows)
+    valid = torch.tensor([[p < kv_actual + isl for p in chip] for chip in positions])
+    assert valid.sum() == isl and valid.any(dim=1).nonzero().flatten().tolist() == real_sp
+    torch.manual_seed(0)
+    a = [torch.randn(1, heads, rows, 64) for _ in range(sp * tp)]
+    padded = [x.clone() for x in a]
+    for x, r in zip(padded, valid.repeat_interleave(tp, dim=0)):
+        x[:, :, ~r] = torch.randn_like(x[:, :, ~r])
+    pccs = _per_head_pccs(a, padded, valid)
+    assert len(pccs) == len(real_sp) * tp * heads, f"{len(pccs)} PCCs"
+    assert min(pccs) > 0.9999, "padding rows were compared"
+    for d in range(sp * tp):
+        r = valid[d // tp]
+        if not r.any():
+            continue
+        for h in range(heads):
+            bad = [x.clone() for x in a]
+            bad[d][0, h, r] = torch.randn_like(bad[d][0, h, r])
+            assert min(_per_head_pccs(a, bad, valid)) < 0.5, f"error on device {d} head {h} real rows missed"
 
 
 # Expanded K (docs/expanded_k/PLAN.md E1/E2): K expanded per head inside the SDPA is the same attention as the absorbed
@@ -2545,7 +2594,7 @@ def _check_expanded_k_vs_absorbed(
     request, mesh_device, device_params, kwargs, use_metadata_tensor, tp_shard_kv, monkeypatch, q_chunk=None
 ):
     topology = per_axis_topology(device_params["fabric_config"])
-    outs, ref_pccs, sdpa_calls = {}, {}, {}
+    outs, ref_pccs, sdpa_calls, valid_rows = {}, {}, {}, []
     for expanded in (False, True):
         recorder = _SdpaRecorder(monkeypatch)
         sdpa_calls[expanded] = recorder.calls
@@ -2558,6 +2607,7 @@ def _check_expanded_k_vs_absorbed(
             tp_shard_kv=tp_shard_kv,
             return_outputs=True,
             return_pccs=True,
+            valid_rows=valid_rows if expanded else None,
             **kwargs,
             mla_kwargs=dict(expanded_k=expanded),
         )
@@ -2565,9 +2615,14 @@ def _check_expanded_k_vs_absorbed(
         assert sdpa_calls[expanded] and all(c["expanded"] == expanded for c in sdpa_calls[expanded]), "mode not applied"
         if expanded and q_chunk is not None:
             assert all(c["q_chunk"] == q_chunk for c in sdpa_calls[True]), f"schedule not q{q_chunk}"
-    # Per head, so a single head's expansion error is not diluted by the output projection.
-    assert len(sdpa_calls[False]) == len(sdpa_calls[True])
-    head_pccs = [p for a, e in zip(sdpa_calls[False], sdpa_calls[True]) for p in _per_head_pccs(a["out"], e["out"])]
+    # Per head, so a single head's expansion error is not diluted by the output projection. Real-token rows only:
+    # padding queries of a partial chunk can attend past a tight cache's end, where the modes need not agree.
+    assert len(sdpa_calls[False]) == len(sdpa_calls[True]) == len(valid_rows), "one SDPA call per forward"
+    head_pccs = [
+        p
+        for a, e, valid in zip(sdpa_calls[False], sdpa_calls[True], valid_rows)
+        for p in _per_head_pccs(a["out"], e["out"], valid)
+    ]
     logger.info(f"SDPA output per (device, head), expanded vs absorbed: min PCC {min(head_pccs):.6f}")
     assert min(head_pccs) >= _EXPANDED_K_MIN_PCC_VS_ABSORBED, f"per-head SDPA PCC {min(head_pccs)}"
     for u, (absorbed, expanded) in enumerate(zip(outs[False], outs[True])):
@@ -2582,6 +2637,111 @@ def _check_expanded_k_vs_absorbed(
             ref_expanded >= ref_absorbed - 0.001
         ), f"user {u}: expanded K PCC {ref_expanded} < absorbed {ref_absorbed} - 0.001"
         assert pcc >= _EXPANDED_K_MIN_PCC_VS_ABSORBED, f"user {u}: expanded K vs absorbed PCC {pcc}"
+
+
+# 2k chunks (256 rows per chip; q128 head pairs, docs/expanded_k/STATUS.md): partial and rotated chunks, a preloaded
+# prefix with a short chunk between full ones, and two users in their own slots.
+_EXPANDED_K_2K_SCENARIOS = [
+    ("c2k-maxedge", dict(iters_isl=[1024, 1056, 2048], chunk_size_global=2048)),
+    ("c2k-prefix", dict(iters_isl=[2048, 1024, 2048], prefill_len=10240, chunk_size_global=2048)),
+    ("c2k-2u", dict(iters_isl=[1024, 2048] * 2, num_users=2, chunk_size_global=2048)),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("kwargs", [pytest.param(kw, id=sid) for sid, kw in _EXPANDED_K_2K_SCENARIOS])
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+@pytest.mark.timeout(0)
+def test_mla_expanded_k_matches_absorbed_2k(
+    request, mesh_device, device_params, kwargs, variant, use_metadata_tensor, tp_shard_kv, monkeypatch
+):
+    """test_mla_expanded_k_matches_absorbed at 2k chunks, on the table's q128 schedule."""
+    _check_expanded_k_vs_absorbed(
+        request, mesh_device, device_params, kwargs, use_metadata_tensor, tp_shard_kv, monkeypatch, q_chunk=128
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "variant", ["kimi_k2_7", "kimi_k3", "mistral_small_4"], indirect=True, ids=["k2_7", "k3", "mistral4"]
+)
+@pytest.mark.parametrize("expanded_k", [None, False, True], ids=["default", "off", "on"])
+@pytest.mark.timeout(0)
+def test_mla_attention_selection(request, mesh_device, device_params, variant, expanded_k, monkeypatch, expect_error):
+    """The dense chunked attention comes from mla_config.MLA_ATTENTION_CONFIG: Kimi runs unrolled V with expanded K by
+    default, and expanded_k=False keeps its K absorbed; a model without an entry (Mistral) runs ring_mla, where
+    expanded_k=True is refused."""
+    ring_mla_calls = []
+    ring_mla = ttnn.transformer.ring_mla
+
+    def counting_ring_mla(*args, **kwargs):
+        ring_mla_calls.append(1)
+        return ring_mla(*args, **kwargs)
+
+    monkeypatch.setattr(ttnn.transformer, "ring_mla", counting_ring_mla)
+    recorder = _SdpaRecorder(monkeypatch)
+    run = functools.partial(
+        _run_chunked_prefill,
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        iters_isl=[5120],
+        mla_kwargs=dict(expanded_k=expanded_k),
+    )
+    if variant.name == "mistral_small_4":
+        if expanded_k:
+            with expect_error(AssertionError, "expanded_k needs the unrolled-V attention"):
+                run()
+            return
+        run()
+        assert ring_mla_calls and not recorder.calls, "Mistral did not run ring_mla"
+        return
+    run()
+    assert not ring_mla_calls, f"{variant.name} ran ring_mla"
+    assert recorder.calls and all(c["expanded"] == (expanded_k is not False) for c in recorder.calls)
+
+
+# Unrolled-V accuracy floor (docs/expanded_k/STATUS.md): the V expansion accumulates in fp32. Accumulated in
+# bf16 at HiFi2 it scored K3 0.99322 and K2.7 0.99637 here (main's ring_mla 0.99805 / 0.99738; fp32 0.99828 / 0.99751),
+# and the harness's own 0.98 checks would not notice.
+_UNROLLED_V_MIN_PCC = {"kimi_k3": 0.9978, "kimi_k2_7": 0.9968}
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
+@pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
+@pytest.mark.timeout(0)
+def test_mla_unrolled_v_accuracy_floor(request, mesh_device, device_params, variant, expanded_k, monkeypatch):
+    _, pccs = _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference="cpu",
+        topology=per_axis_topology(device_params["fabric_config"]),
+        iters_isl=[5120, 5120],
+        prefill_len=10240,
+        use_metadata_tensor=True,
+        return_outputs=True,
+        return_pccs=True,
+        mla_kwargs=dict(expanded_k=expanded_k),
+    )
+    floor = _UNROLLED_V_MIN_PCC[variant.name]
+    logger.info(f"{variant.name} expanded_k={expanded_k}: output PCC vs CPU reference {pccs[0]:.6f} (floor {floor})")
+    assert pccs[0] >= floor, f"output PCC {pccs[0]} < {floor}"
 
 
 # Schedules outside the measured table (forced here): no K split with one Q chunk per core (q160/k256, every core

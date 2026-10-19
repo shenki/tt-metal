@@ -1334,11 +1334,12 @@ class ttMLA:
         )
         return slot_buf
 
-    # V expansion (minimal_matmul), swept on Blackhole (HiFi2, 2k-262k local rows, i.e. short to 512k KV): the whole
+    # V expansion (minimal_matmul), swept on Blackhole (bf16 accumulation at HiFi2 with 8x1 / 4x2 subblocks, before the
+    # move to fp32 accumulation with 4x1 / 2x2; 2k-262k local rows): the whole
     # latent K in one block (packed straight to the output), hardware multicast of the input blocks and M along the
     # grid's y axis. M is split over the cores at runtime, so one config serves every KV length. At this many local
     # heads or more M8/N1 8x1 (Kimi-K3, 24; within 1.2% of the per-length best), below it M4/N2 4x2 (Kimi-K2.7, 16;
-    # within 5.2%). K3 at the Galaxy shape: 97 us, 71% FPU util.
+    # within 5.2%). K3 at the Galaxy shape (bf16 era): 97 us, 71% FPU util.
     _UNROLLED_V_WIDE_LOCAL_HEADS = 24
 
     def _expanded_k_supported(self, required: bool) -> bool:
@@ -1384,7 +1385,7 @@ class ttMLA:
             M_block_size=8 if wide else 4,
             K_block_size=self.kv_lora_rank // ttnn.TILE_SIZE,
             N_block_size=1 if wide else 2,
-            subblock_h=8 if wide else 4,
+            subblock_h=4 if wide else 2,  # h x w = 4 tiles, the fp32 destination's limit (8 in bf16)
             subblock_w=1 if wide else 2,
             compute_with_storage_grid_size=ttnn.CoreCoord(*self.ring_sdpa_compute_grid),
             hw_mcast=True,
@@ -1392,9 +1393,13 @@ class ttMLA:
         )
         self._expand_v_compute_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
+            # Each V_h element is a kv_lora_rank-term sum, stored in bf8. Accumulating it in bf16 cost 0.001 (K2.7) to
+            # 0.005 (K3) output PCC against main's ring_mla, which keeps V latent; fp32 accumulation recovers it (K3
+            # 0.99322 -> 0.99828, ring_mla 0.99805; expanded_k/STATUS.md). HiFi2 is sufficient for the bf8_b operands
+            # (7-bit mantissa): HiFi4 gave the same PCC on K3 and K2.7.
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
         # Host-path (no metadata) row count, rewritten in place every chunk.
@@ -1407,17 +1412,21 @@ class ttMLA:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    # Measured (Q chunk, K chunk, K splits) at the production shapes, keyed (kvpe width, local heads, local rows), all
-    # at 640 rows per chip (the 5k chunk on 8 SP devices):
+    # Measured (Q chunk, K chunk, K splits) at the production shapes, keyed (kvpe width, local heads, local rows); the
+    # absorbed entries are all at 640 rows per chip (the 5k chunk on 8 SP devices):
     #   Kimi-K3 (576, 24): q160 = 96 units on 96 cores;
     #   Kimi-K2.7 (576, 16): q320 k256 split three ways = 96 cores, 10% faster SDPA than q128 (80 cores).
     # Shapes not listed fall back to the model below, which is calibrated on the 576-wide K.
     # Expanded K (docs/expanded_k/PLAN.md): every core still expands its head's whole K chunk (Phase 1), so fewer cores
     # per head wins. K3 at q320 runs 2 Q chunks per head in 2 K-split bands (each core expands half the heads' K once per
     # band slice), 12.5-14.6% under absorbed q160/k512 at 50k-512k; k512 does not fit L1 beside the expanded K^T CB.
+    # 2k chunks (256 rows per chip): q128 gives each head 2 Q chunks, so pairs still split the expansion; swept at 512k
+    # HiFi2 (K3 28.7 ms vs 46.2 for 1 band and 32.7 for q256 / 4 bands; K2.7 19.9 vs 25.9 / 24.3); k512 overflows L1.
     _EXPANDED_K_SDPA_CHUNKS = {
         (576, 24, 640): (320, 256, 2),
         (576, 16, 640): (320, 256, 3),
+        (576, 24, 256): (128, 256, 2),
+        (576, 16, 256): (128, 256, 3),
     }
 
     _UNROLLED_V_SDPA_CHUNKS = {
