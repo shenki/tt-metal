@@ -43,7 +43,7 @@ inline constexpr bool mish_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_mish()) {
             calculate_mish_bf16<ITERATIONS>();
             return;
@@ -110,7 +110,7 @@ inline void mish_init() {
     // so the SFPLOADMACRO fast-path init is not needed. But, we need sfpu_reciprocal_init's
     // vConstFloatPrgm0 = 2.0f for the inline NR step. So, call sfpu_reciprocal_init directly.
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         init_mish_bf16();
     }
 }
