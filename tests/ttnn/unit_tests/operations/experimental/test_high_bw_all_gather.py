@@ -16,6 +16,8 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from models.demos.minimax_m3.tt.ccl import MSA_GATHER_ROWS, msa_gather_strip_cores
+from models.demos.minimax_m3.tt.moe.shared_overlap import split_grid
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
@@ -1545,18 +1547,13 @@ def _sparse_mla_overlap_grids(mesh_device):
     return topk_grid, gather_grid
 
 
-_MSA_GATHER_ROWS = 2  # models/demos/minimax_m3/tt/ccl.py MSA_GATHER_ROWS
-
-
 def _msa_overlap_grids(mesh_device):
-    """The MiniMax-M3 packed-prefill carve: the bottom _MSA_GATHER_ROWS rows gather, the rows above compute."""
+    """The MiniMax-M3 packed-prefill carve (tt/ccl.py get_msa_overlap): the bottom MSA_GATHER_ROWS rows gather, the
+    rows above compute."""
     grid = mesh_device.compute_with_storage_grid_size()
-    split = grid.y - _MSA_GATHER_ROWS
-    compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, split - 1))])
-    gather_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, split), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-    needed = _NUM_LINKS * 2 * (4 + 1)  # the 4-worker tier: 4 workers + 1 mux per direction per link
-    if gather_grid.num_cores() < needed:
-        pytest.skip(f"a {_MSA_GATHER_ROWS}-row strip of {gather_grid.num_cores()} cores holds no 4-worker tier")
+    compute_grid, gather_grid = split_grid(grid.x, grid.y, grid.y - MSA_GATHER_ROWS)
+    if gather_grid.num_cores() < msa_gather_strip_cores(_NUM_LINKS):
+        pytest.skip(f"a {MSA_GATHER_ROWS}-row strip of {gather_grid.num_cores()} cores holds no 4-worker tier")
     return compute_grid, gather_grid
 
 

@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.minimax_m3.tt.moe.shared_overlap import split_grid
 
 # L1_SMALL reservation for every M3 mesh open (adapter, harnesses, unit tests): high_bw_all_gather parks its
 # two global semaphores there and otherwise falls back to general L1 with a warning, which fragmented L1
@@ -22,6 +23,11 @@ L1_SMALL_SIZE = 1152
 # chunk on both stages. The op test of the schedule carves the same strip
 # (tests/ttnn/.../test_high_bw_all_gather.py _msa_overlap_grids).
 MSA_GATHER_ROWS = 2
+
+
+def msa_gather_strip_cores(num_links: int) -> int:
+    """Cores high_bw_all_gather's 4-worker tier needs: 4 workers + 1 mux per direction per link."""
+    return num_links * 2 * (4 + 1)
 
 
 @dataclass
@@ -253,16 +259,11 @@ class CCLManager:
             grid = self.compute_grid_size
             compute_rows = grid.y - MSA_GATHER_ROWS
             assert compute_rows > 0, f"grid {grid.x}x{grid.y} too small for a {MSA_GATHER_ROWS}-row gather strip"
-            compute = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, compute_rows - 1))}
-            )
-            gather = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, compute_rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-            )
+            compute, gather = split_grid(grid.x, grid.y, compute_rows)
             # high_bw_all_gather's worker tier is picked from the gather bytes and snapped down to what the strip
             # holds (a performance floor: the op accepts smaller strips with a warning, down to one worker). The
-            # strip must fit the 4-worker tier: 4 workers + 1 mux per direction per link.
-            needed = self.num_links * 2 * (4 + 1)
+            # strip must fit the 4-worker tier.
+            needed = msa_gather_strip_cores(self.num_links)
             assert (
                 gather.num_cores() >= needed
             ), f"gather strip of {gather.num_cores()} cores holds no 4-worker tier ({needed} needed)"
