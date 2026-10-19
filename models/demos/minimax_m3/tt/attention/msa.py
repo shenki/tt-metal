@@ -154,17 +154,6 @@ def index_branch_forward(
     return iq, ik
 
 
-# Debug hook (default off): called with every MSA call's top-k block ids, e.g. to compare block selection
-# between two runs. Set with set_block_id_sink(fn) / set_block_id_sink(None). It fires inside the overlap window
-# too, so a sink that reads back serializes that forward.
-_block_id_sink = None
-
-
-def set_block_id_sink(fn):
-    global _block_id_sink
-    _block_id_sink = fn
-
-
 def msa_select_blocks(
     index_q,
     index_k,
@@ -215,8 +204,6 @@ def msa_select_blocks(
             topk_kwargs["subdevice_id"] = overlap.compute_sd_id
             topk_kwargs["sub_core_grids"] = overlap.compute_cores
         block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks, **topk_kwargs)
-        if _block_id_sink is not None:
-            _block_id_sink(block_ids)
     return block_ids
 
 

@@ -33,7 +33,6 @@ Env:
                      equal), so the sparse attention runs faster than on real content. For profiling only:
                      a device-profiler capture of the real fill is tens of GB per 100k of depth  [default real]
   PACKED_REFERENCE   1 -> run each segment alone on the plain path (see above)            [default 0]
-  PACKED_TOPK_DUMP   file: record the MSA top-k block ids of one extra forward of the last composition
   PACKED_PROFILE     1 -> zone-profile one extra forward of the last composition (run under
                      `python3 -m tracy -v -r -p`; zones as for profile_prefill.py, root `profiled_chunk`;
                      the profiler is drained every PACKED_PROFILE_READ_EVERY [16] forwards outside it) [default 0]
@@ -260,28 +259,6 @@ def main():
             )
             for slot, stream, h, n in segs:  # the composition wrote these positions: history now reaches them
                 depth[slot] = (stream, max(depth.get(slot, (stream, 0))[1], h + SEG))
-
-        topk_dump = os.getenv("PACKED_TOPK_DUMP")
-        if topk_dump:
-            # One extra untimed forward of the last composition, recording every MSA call's top-k block ids.
-            # Order: per layer, the cold segments in forward order then the warm ones when the overlap runs
-            # (the warm ones are pipelined after the cold chains), plain forward order otherwise; the reference
-            # run records segment-major then layer. The sink reads back inside the overlap window, which
-            # serializes this forward: it is a correctness forward, never a timed one.
-            import torch
-
-            from models.demos.minimax_m3.tt.attention import msa
-
-            composer = ttnn.ConcatMesh2dToTensor(mesh, dims=(2, 1), mesh_shape=mesh.shape)
-            captured = []
-            msa.set_block_id_sink(lambda ids: captured.append(ttnn.to_torch(ids, mesh_composer=composer)))
-            run(compos[-1][2])
-            msa.set_block_id_sink(None)
-            segs = compos[-1][2]
-            torch.save(
-                {"ids": captured, "reference": reference, "segments": [(h, n) for _, _, h, n in segs]}, topk_dump
-            )
-            emit(kind="topk_dumped", path=topk_dump, calls=len(captured))
 
         if PROFILE:
             # One extra untimed forward of the last composition under the root zone the parser reports, into a
