@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline sfpi::vFloat template_reciprocal(const sfpi::vFloat a) {
+sfpi_inline sfpi::vFloat _sinh_bw_reciprocal_(const sfpi::vFloat a) {
     // The SFPARECIP seed, then two Newton steps; a NaN step (a seed of 0 or inf) keeps the seed.
     sfpi::vFloat y = sfpi::approx_recip(a);
     sfpi::vFloat t = a * y - 2.0f;
@@ -63,7 +63,7 @@ inline void calculate_sinh_bw_bf16() {
         v_if(v3_e >= 255) { v3 = sfpi::copysgn(vFloat(std::numeric_limits<float>::infinity()), v4); }
         v_elseif(v3_e > 0) { v3 = sfpi::setexp(v4, v3_e); }
         v_endif;
-        vFloat v2 = template_reciprocal(v3);
+        vFloat v2 = _sinh_bw_reciprocal_(v3);
         vFloat v1 = v2 * vFloat(0.25f) + v3;
         vFloat factor = v1;
         vFloat x = dst_reg[d];

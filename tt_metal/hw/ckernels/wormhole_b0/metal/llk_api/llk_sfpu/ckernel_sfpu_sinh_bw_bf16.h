@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline sfpi::vFloat template_reciprocal(const sfpi::vFloat in) {
+sfpi_inline sfpi::vFloat _sinh_bw_reciprocal_(const sfpi::vFloat in) {
     // A quadratic seed on the mantissa in [1, 2), two Newton steps and the exponent's complement.
     sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
     sfpi::vFloat y = 1.4545459747314453f + 0.323232501745224f * negative_x;
@@ -66,7 +66,7 @@ inline void calculate_sinh_bw_bf16() {
         v_if(v3_e >= 255) { v3 = sfpi::copysgn(vFloat(std::numeric_limits<float>::infinity()), v4); }
         v_elseif(v3_e > 0) { v3 = sfpi::setexp(v4, v3_e); }
         v_endif;
-        vFloat v2 = template_reciprocal(v3);
+        vFloat v2 = _sinh_bw_reciprocal_(v3);
         vFloat v1 = v2 * vFloat(0.25f) + v3;
         vFloat factor = v1;
         vFloat x = dst_reg[d];
