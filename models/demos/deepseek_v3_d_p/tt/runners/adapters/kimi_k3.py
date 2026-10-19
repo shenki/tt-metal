@@ -148,11 +148,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
         from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3KvCaches
+        from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
         schedule = KimiK3LayerSchedule.build(KimiK3Config, params.first_layer_idx, params.num_layers)
         kvpe = None
         if schedule.num_mla_layers > 0:
+            check_kv_bank_aligned(params.max_seq_len, params.sp_factor, mesh_device.dram_grid_size().x)
             kvpe = allocate_mla_kvpe_cache(
                 mesh_device=mesh_device,
                 hf_config=hf_config,
@@ -177,12 +179,6 @@ class KimiK3Adapter(MLAPrefillAdapter):
             )
             kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
         return KimiK3KvCaches(kvpe=kvpe, kda_states=kda_states)
-
-    def kv_state_caches(self, kv_caches):
-        states = kv_caches.kda_states
-        if states is None:
-            return {}
-        return {"kda_recurrent": states.recurrent, "kda_convolution": states.convolution}
 
     def layer_split_boundaries(self, num_layers: int):
         """Pipeline ranks may only start on an AttnRes block boundary.

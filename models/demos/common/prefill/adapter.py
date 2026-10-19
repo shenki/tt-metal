@@ -213,13 +213,6 @@ class PrefillModelAdapter(ABC):
         ``KvCaches``). ``params`` carries the per-rank knobs (max_seq_len, mesh_shape, this rank's
         num_layers, num_users, …)."""
 
-    @abstractmethod
-    def kv_token_caches(self, kv_caches: KvCaches) -> dict:
-        ...
-
-    def kv_state_caches(self, kv_caches: KvCaches) -> dict:
-        return {}
-
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
         these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse

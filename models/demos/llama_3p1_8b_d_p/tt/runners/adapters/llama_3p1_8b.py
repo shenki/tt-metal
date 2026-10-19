@@ -117,9 +117,11 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
 
         config_from_params(params)
         import ttnn
+        from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
         from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
         from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache
 
+        check_kv_bank_aligned(params.max_seq_len, params.sp_factor, mesh_device.dram_grid_size().x)
         return allocate_kv_cache(
             mesh_device,
             MeshConfig(params.mesh_shape, tp=params.tp_factor),
@@ -128,9 +130,6 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             cache_dtype=ttnn.bfloat8_b,
         )
-
-    def kv_token_caches(self, kv_caches):
-        return {"k": kv_caches.k, "v": kv_caches.v}
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the model + runtime for this rank.

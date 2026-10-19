@@ -98,8 +98,10 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         """Allocate the MLA kvpe KV cache (qk_rope_head_dim + kv_lora_rank per token; one shared cache of
         num_users * num_layers user-major slots). Dense MLA has no indexer cache, so ``index`` stays None.
         The engine owns the returned cache and passes it into every runtime call."""
+        from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
+        check_kv_bank_aligned(params.max_seq_len, params.sp_factor, mesh_device.dram_grid_size().x)
         return MlaKvCaches(
             kvpe=allocate_mla_kvpe_cache(
                 mesh_device=mesh_device,
@@ -111,14 +113,6 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 num_users=params.num_users,
             )
         )
-
-    def kv_token_caches(self, kv_caches):
-        caches = {}
-        if kv_caches.kvpe is not None:
-            caches["kvpe"] = kv_caches.kvpe.storage
-        if kv_caches.index is not None:
-            caches["index"] = kv_caches.index
-        return caches
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)

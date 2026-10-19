@@ -121,7 +121,7 @@ class MigrationDriver:
             if not self.cross_endpoint and num_slots is not None and dst >= num_slots:
                 raise ValueError(
                     f"migration dst slot {dst} (src {src}) is out of range: the KV table has {num_slots} "
-                    f"slot(s) [0,{num_slots}), one per pipeline rank."
+                    f"slot(s) [0,{num_slots}). Grow PREFILL_NUM_USERS or pick a smaller dst."
                 )
 
         spec = os.environ.get("PREFILL_MIGRATION_PAIRS", "").strip()

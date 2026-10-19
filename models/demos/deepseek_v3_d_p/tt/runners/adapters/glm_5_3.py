@@ -77,6 +77,7 @@ class GLM53Adapter(MLAPrefillAdapter):
 
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
+        from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
         from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -88,6 +89,7 @@ class GLM53Adapter(MLAPrefillAdapter):
         # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
         # tp_axis as the write op and the migration table.
         kv_tp_axis = params.tp_axis
+        check_kv_bank_aligned(params.max_seq_len, params.sp_factor * params.tp_factor, mesh_device.dram_grid_size().x)
         mtp_levels = params.mtp_levels if params.is_last_rank else 0
         if params.mtp_levels:
             enable_mtp_indexer_slot(hf_config)

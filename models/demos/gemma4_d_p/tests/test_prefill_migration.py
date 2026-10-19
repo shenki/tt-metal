@@ -219,7 +219,7 @@ def run_migration_case(gate, context_len, output_dir):
         PREFILL_H2D_CONNECT_TIMEOUT="120",
         PREFILL_MIGRATION_DEST_ENDPOINT_ID="1",
         PREFILL_MIGRATION_SRC_ENDPOINT_ID="1",
-        PREFILL_MIGRATION_PAIRS="0:0",
+        PREFILL_MIGRATION_PAIRS=f"0:{Gemma4ServiceConfig.MAX_USER_SLOTS - 1}",
         MIGRATION_DONE_FILE=str(output_dir / "migration_done"),
     )
     module = "prefill_producer" if gate == "mock" else "migration_driver"
@@ -248,7 +248,7 @@ def run_migration_case(gate, context_len, output_dir):
                     raise RuntimeError(
                         f"Producer exited with code {producer_returncode}. See {output_dir / 'producer.log'}."
                     )
-                assert runtime.slot_ends == [context_len]
+                assert runtime.slot_ends == [context_len] + [0] * (Gemma4ServiceConfig.MAX_USER_SLOTS - 1)
                 table, device_map = table_and_map.result()
                 staging = {}
 

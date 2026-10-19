@@ -119,7 +119,32 @@ SCENARIOS = {
         "max_seq_len": 61440,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
-    # 2) GLM-5.3 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
+    # 2) Round-robin across 4 users, 4 chunks each (u0c0, u1c0, u2c0, u3c0, u0c1, ...). Deterministic
+    #    interleave correctness; breadth over depth so it fits the KV budget (4 x 20480).
+    "round_robin_4users": {
+        "users": 4,
+        "max_seq_len": 20480,
+        "producer": {
+            "PREFILL_PRODUCER_INTERLEAVE": "round_robin",
+            "PREFILL_PRODUCER_CHUNKS": "4",
+            "PREFILL_PRODUCER_MAX_REQUESTS": "4",
+            "PREFILL_PRODUCER_P_GAP": "0",
+            "PREFILL_PRODUCER_P_BURST": "0",
+        },
+    },
+    # 3) Random interleave across 8 users, 1-2 chunks each, with gaps/bursts + slot recycling (seeded =>
+    #    reproducible). Chaotic multi-user correctness at the highest slot count (KV budget 8 x 10240).
+    "random_8users": {
+        "users": 8,
+        "max_seq_len": 10240,
+        "producer": {
+            "PREFILL_PRODUCER_CHUNKS": "1,2",
+            "PREFILL_PRODUCER_MAX_REQUESTS": "12",
+            "PREFILL_PRODUCER_P_GAP": "0.1",
+            "PREFILL_PRODUCER_P_BURST": "0.2",
+        },
+    },
+    # 4) GLM-5.3 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
     #    MERGED two-config KV chunk address table: config 0 = the bf16 ROW_MAJOR MLA KVPE cache (all 78
     #    layers), config 1 = the bfp8 lightning-indexer KEY cache (only the 21 `full` layers, compacted).
     #    The runner builds that single merged table and the producer reads BOTH configs back through it

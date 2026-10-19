@@ -104,8 +104,10 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         Index 0 is a ``GptOssKVCache`` (``.k`` / ``.v`` tensors). Migration uses the multi-config
         table in ``tt/runners/kv_chunk_table.py`` (config 0..N-1 = k heads, N..2N-1 = v heads).
         """
+        from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
         from models.demos.gpt_oss_d_p.tt.attention import allocate_kv_cache
 
+        check_kv_bank_aligned(params.max_seq_len, params.sp_factor, mesh_device.dram_grid_size().x)
         bounded = _bounded_sliding_kv_cache_enabled()
         layer_types = getattr(hf_config, "layer_types", None)
         if layer_types is not None:
@@ -126,11 +128,6 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
                 )
             ]
         )
-
-    def kv_token_caches(self, kv_caches):
-        cache = kv_caches[0]
-        caches = {"k": cache.k, "v": cache.v, "k_sliding": cache.k_sliding, "v_sliding": cache.v_sliding}
-        return {name: tensor for name, tensor in caches.items() if tensor is not None}
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV

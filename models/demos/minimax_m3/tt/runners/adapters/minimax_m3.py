@@ -129,9 +129,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         """Allocate M3's regular TP-head-sharded triple KV cache (K / V / index_k), one shared cache of
         num_users * num_layers user-major slots. The engine owns the returned object and passes it into
         every runtime call."""
+        from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
         from models.demos.minimax_m3.tt.attention import allocate_kv_caches
 
-        return allocate_kv_caches(
+        caches = allocate_kv_caches(
             mesh_device,
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
@@ -139,9 +140,9 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             num_users=params.num_users,
             head_dim=hf_config.head_dim,
         )
-
-    def kv_token_caches(self, kv_caches):
-        return {"k": kv_caches.k, "v": kv_caches.v, "index_k": kv_caches.index_k}
+        stripes = params.sp_factor * (params.tp_factor if caches.index_k_tp_axis is not None else 1)
+        check_kv_bank_aligned(params.max_seq_len, stripes, mesh_device.dram_grid_size().x)
+        return caches
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the M3 model and return the runtime. Weights load from the tilized cache when it is

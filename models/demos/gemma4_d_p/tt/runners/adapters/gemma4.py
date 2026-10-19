@@ -91,10 +91,12 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         validate_params(params)
+        from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
         from models.demos.gemma4_d_p.config import MeshConfig
         from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
         from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
 
+        check_kv_bank_aligned(params.max_seq_len, params.sp_factor, mesh_device.dram_grid_size().x)
         return allocate_ring_kv_caches(
             MeshConfig(mesh_device),
             Gemma4ModelArgs.from_hf_config(hf_config),
@@ -102,16 +104,6 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             prefill_chunk_size=params.chunk_size,
         )
-
-    def kv_token_caches(self, kv_caches):
-        caches = {}
-        for i, (layer, layer_type) in enumerate(zip(kv_caches.layers, kv_caches.layer_types)):
-            if layer_type == "full_attention":
-                caches[f"kv.{i}"] = layer.kv
-            else:
-                caches[f"k.{i}"] = layer.k
-                caches[f"v.{i}"] = layer.v
-        return caches
 
     def build_runtime(self, *, mesh_device, hf_config, params):
         validate_params(params)
