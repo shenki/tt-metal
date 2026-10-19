@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    GALAXY_CHUNK_SEQUENCES,
     LayerNrmseThresholds,
     assert_matches_reference,
     check_kimi_k3_accuracy,
@@ -86,7 +87,40 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     device_params: dict,
     interval: str,
 ) -> None:
-    """Gate K3 dimensions on one valid interval against Torch; repeat runs must match exactly.
+    """Gate K3 dimensions on one valid interval against Torch; repeat runs must match exactly."""
+    _check_synthetic_interval(mesh_device, tensor_parallel_axis, _SEQUENCE, interval)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,tensor_parallel_axis,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            1,
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-torus-xy",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("interval", ["full-split-rank1", "two-row-tail"])
+@pytest.mark.parametrize("sequence", GALAXY_CHUNK_SEQUENCES, ids=lambda sequence: f"T{sequence // 1024}k")
+def test_synthetic_kimi_k3_galaxy_chunk_accuracy(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+    device_params: dict,
+    interval: str,
+    sequence: int,
+) -> None:
+    """Gate every Galaxy chunk length against Torch, on a split start and a partial split tail."""
+    _check_synthetic_interval(mesh_device, tensor_parallel_axis, sequence, interval)
+
+
+def _check_synthetic_interval(
+    mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, sequence: int, interval: str
+) -> None:
+    """Check one valid interval of a synthetic K3 sequence against Torch; repeat runs must match exactly.
 
     Padded rows hold NaN, so any read of them reaches the checked results. The
     reference runs on the valid prefix only. Repeated runs compare by value on device
@@ -96,9 +130,9 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     sequence_parallel_axis = 1 - tensor_parallel_axis
     sp_size = mesh_shape[sequence_parallel_axis]
     layout = f"SP{sp_size}xTP{mesh_shape[tensor_parallel_axis]}"
-    local_rows = _SEQUENCE // sp_size
-    actual_start, length = _INTERVALS[interval](local_rows, _SEQUENCE)
-    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
+    local_rows = sequence // sp_size
+    actual_start, length = _INTERVALS[interval](local_rows, sequence)
+    case = make_synthetic_kimi_k3_test_case(sequence=sequence)
     golden_output, golden_state, reference_seconds = load_or_compute_cpu_reference(
         replace(case, hidden=case.hidden[:, :length].clone())
     )
@@ -141,7 +175,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             sp_axis=sequence_parallel_axis,
             tp_axis=tensor_parallel_axis,
             config=case.config,
-            label=f"Synthetic Kimi-K3 T{_SEQUENCE} {layout} {interval} start={actual_start} length={length}",
+            label=f"Synthetic Kimi-K3 T{sequence} {layout} {interval} start={actual_start} length={length}",
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
             nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.05, convolution=0.007),
@@ -154,7 +188,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             + json.dumps(
                 {
                     "layout": layout,
-                    "sequence": _SEQUENCE,
+                    "sequence": sequence,
                     "weights": "deterministic synthetic",
                     "reference": "independent pure-Torch FP32 CPU reference",
                     "cpu_reference_seconds": reference_seconds,

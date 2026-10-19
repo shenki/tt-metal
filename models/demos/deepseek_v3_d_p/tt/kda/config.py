@@ -27,6 +27,11 @@ KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
 # Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
+# That budget assumes the summary scan splits each head's value tiles across cores down to one per core, as on
+# Galaxy SP8xTP4 with one summary group per head. More groups (or heads) leave fewer cores per head, and each extra
+# value tile on a core adds this much to the summary's static circular buffers (recurrent_chunk_scan_program_factory:
+# 54 FP32 and 10 BF16 tiles), which the chunk terms must then make room for.
+KDA_SUMMARY_L1_BYTES_PER_VALUE_TILE = 54 * 4096 + 10 * 2048
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
@@ -42,6 +47,10 @@ KDA_HISTORY_EXCHANGE_SEMAPHORES = 3
 # The gated norm's output stays in interleaved L1 until the output projection reads it when each core's share fits
 # this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
+# The tuned input projection writes its output to interleaved L1, where the layer reads it in place until the gated
+# norm, when each core's share fits this budget (130 KiB for Kimi-K3 on Galaxy SP8xTP4 at T=5120, 260 KiB at T=10240);
+# larger geometries write it to DRAM, leaving L1 to the recurrence's circular buffers.
+KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE = 272 * 1024
 # The output projection's partial sums stay in interleaved L1 until the TP reduce-scatter reads them when each core's
 # share fits this budget (75 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
@@ -79,9 +88,10 @@ class KDARecurrenceProgramConfig:
     """Tunable recurrence strategy and compute fidelity."""
 
     local_scan_strategy: Literal["direct", "grouped"] = "direct"
-    # Exact number of chunks per group. Construction validates divisibility and
-    # worker capacity; execution never silently changes an explicit configuration.
-    summary_group_chunks: int = 20
+    # Exact number of chunks per group, or None to derive it from the geometry (auto_summary_group_chunks).
+    # Construction validates divisibility and worker capacity; execution never silently changes an explicit
+    # configuration.
+    summary_group_chunks: int | None = None
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     # Gather the SP prefix summaries with high_bw_all_gather into a persistent DRAM buffer. The recurrence takes it only
@@ -91,7 +101,7 @@ class KDARecurrenceProgramConfig:
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
             raise ValueError("local_scan_strategy must be 'direct' or 'grouped'")
-        if self.summary_group_chunks <= 0:
+        if self.summary_group_chunks is not None and self.summary_group_chunks <= 0:
             raise ValueError("summary_group_chunks must be positive")
 
 
@@ -106,7 +116,7 @@ class KDAProgramConfig:
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
-    # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
+    # Derive the projection matmul schedules from the geometry (projection_matmul_config); False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
 
@@ -120,53 +130,124 @@ class KDAProgramConfig:
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
 
 
-# Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
-_TUNED_PROJECTION_ROWS = 640
+def scan_value_tiles_per_core(grid: ttnn.CoreCoord, batch_heads: int, value_tiles: int) -> int:
+    """Value tiles each scan core keeps: kda_factory_utils.cpp distribute_value_blocks' split of each head."""
+
+    def best_split(line: int, lines: int) -> int:
+        for candidate in range(min(value_tiles, line), 1, -1):
+            if value_tiles % candidate == 0 and batch_heads <= (line // candidate) * lines:
+                return candidate
+        return 1
+
+    return value_tiles // best_split(grid.x, grid.y)
 
 
-def tuned_projection_matmul_configs(
-    grid: ttnn.CoreCoord,
-    rows: int,
-    input_n: int,
-    output_k: int,
-    output_n: int,
-) -> tuple[
-    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None
-]:
-    """Return the tuned input and output projection schedules laid out on ``grid``.
+# The cross-group prefix that more than one group per head adds (a reduce, a gather and an exclusive scan), in scan
+# chunk steps of one value tile: ~115 us against ~7.5 us per step on Galaxy SP8xTP4.
+_GROUP_PREFIX_CHUNK_STEPS = 16
 
-    Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
-    (bf16, FP32 destination accumulation); subblocks stay within the 4-tile FP32 destination limit.
-    Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
+
+def auto_summary_group_chunks(grid: ttnn.CoreCoord, batch_heads: int, num_chunks: int, value_tiles: int) -> int:
+    """Chunks per summary group that minimise the scans' sequential work.
+
+    A core of the summary and recurrent scans walks every chunk of its group over the value tiles it keeps, so its
+    work is (chunks per group) x (value tiles per core). More groups shorten the walk only while their extra owners
+    find free workers to split heads' value tiles over, and cost the cross-group prefix; ties keep the fewest groups.
+    Each group needs one worker per head.
     """
-    row_tiles = rows // ttnn.TILE_SIZE
-    per_core_m = math.ceil(row_tiles / grid.y)
-    per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
-    input_per_core_n = math.ceil(math.ceil(input_n / ttnn.TILE_SIZE) / grid.x)
-    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
-        return None, None
-    # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
-    # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
-    # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
-    input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=3,
-        out_block_h=per_core_m,
-        out_block_w=input_per_core_n,
-        per_core_M=per_core_m,
-        per_core_N=input_per_core_n,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=True,
+    capacity = grid.x * grid.y
+    candidates = [
+        groups for groups in range(1, num_chunks + 1) if num_chunks % groups == 0 and batch_heads * groups <= capacity
+    ]
+    if not candidates:
+        raise ValueError(f"grouped KDA needs at least {batch_heads} summary owners, but only {capacity} are supported")
+    groups = min(
+        candidates,
+        key=lambda g: (
+            num_chunks // g * scan_value_tiles_per_core(grid, batch_heads * g, value_tiles)
+            + (_GROUP_PREFIX_CHUNK_STEPS if g > 1 else 0),
+            g,
+        ),
     )
-    output_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    return num_chunks // groups
+
+
+# Per-core L1 a derived projection schedule may take for its circular buffers. Sized by the largest footprints that run
+# next to the layer's other L1 tensors on Galaxy SP8xTP4 (the input projection at 896 rows with 4-wide K blocks, and
+# its L1 output, which KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE bounds separately); with the device's CCL semaphores
+# fragmenting L1, a 1192 KiB output projection already clashed.
+KDA_PROJECTION_CB_L1_BYTES_PER_CORE = 1170 * 1024
+# FP32 destination accumulation holds four tiles.
+_FP32_DEST_TILES = 4
+# Narrower K blocks double the per-block overhead without saving bandwidth.
+_MIN_PROJECTION_K_BLOCK = 2
+# Each pass over a core's rows re-reads its weight columns from DRAM for that many row tiles. Passes of one row tile
+# leave the projection bound by its weight stream, and it loses to the auto-selected schedule (LoudBox SP4xTP2's input
+# projection: 5.1 ms in four one-tile passes against 2.5 ms).
+_MIN_PROJECTION_BLOCK_H = 2
+
+
+def _divisors(value: int, limit: int) -> list[int]:
+    return [d for d in range(min(value, limit), 0, -1) if value % d == 0]
+
+
+def _projection_cb_bytes(block_h: int, k_block: int, per_core_n: int) -> int:
+    """Circular-buffer bytes of a 2D-multicast bf16 projection: double-buffered activation and weight blocks, the bf16
+    output block and its FP32 accumulation block."""
+    bf16_tile, fp32_tile = 2 * ttnn.TILE_SIZE * ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE * ttnn.TILE_SIZE
+    return (
+        2 * block_h * k_block * bf16_tile
+        + 2 * k_block * per_core_n * bf16_tile
+        + block_h * per_core_n * (bf16_tile + fp32_tile)
+    )
+
+
+def projection_matmul_config(
+    grid: ttnn.CoreCoord, rows: int, k: int, n: int
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
+    """Return a 2D-multicast schedule for a bf16 [rows, k] x [k, n] projection on ``grid``, or None for auto.
+
+    Rows are spread over the grid's rows and output columns over its columns. A core computes its rows in passes of
+    ``out_block_h`` row tiles and re-reads its weight columns once per pass, so the schedule takes the per-core row
+    count and pass height that minimise (row tiles per core + passes) within the circular-buffer budget, then the
+    widest K block that fits. None keeps the auto-selected config where a 2D schedule would lose to it: with fewer row
+    tiles than grid rows, which leaves rows of cores idle, or when no pass of _MIN_PROJECTION_BLOCK_H row tiles fits.
+    """
+    tile = ttnn.TILE_SIZE
+    row_tiles, k_tiles, n_tiles = rows // tile, math.ceil(k / tile), math.ceil(n / tile)
+    if row_tiles < grid.y:
+        return None
+    per_core_n = math.ceil(n_tiles / grid.x)
+    k_blocks = [w for w in _divisors(k_tiles, k_tiles) if w >= min(_MIN_PROJECTION_K_BLOCK, k_tiles)]
+
+    def fits(block_h: int, k_block: int) -> bool:
+        return _projection_cb_bytes(block_h, k_block, per_core_n) <= KDA_PROJECTION_CB_L1_BYTES_PER_CORE
+
+    best = None
+    min_per_core_m = math.ceil(row_tiles / grid.y)
+    for per_core_m in range(min_per_core_m, 2 * min_per_core_m + 1):
+        heights = [
+            h
+            for h in _divisors(per_core_m, per_core_m)
+            if fits(h, k_blocks[-1]) and h >= min(per_core_m, _MIN_PROJECTION_BLOCK_H)
+        ]
+        if not heights:
+            continue
+        cost = (per_core_m + per_core_m // heights[0], per_core_m)
+        if best is None or cost < best[0]:
+            best = (cost, per_core_m, heights[0])
+    if best is None:
+        return None
+    _, per_core_m, block_h = best
+    k_block = next(w for w in k_blocks if fits(block_h, w))
+    subblock_w = _divisors(per_core_n, _FP32_DEST_TILES)[0]
+    subblock_h = _divisors(block_h, _FP32_DEST_TILES // subblock_w)[0]
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
-        in0_block_w=8,
-        out_subblock_h=2,
-        out_subblock_w=1,
-        out_block_h=per_core_m,
+        in0_block_w=k_block,
+        out_subblock_h=subblock_h,
+        out_subblock_w=subblock_w,
+        out_block_h=block_h,
         out_block_w=per_core_n,
         per_core_M=per_core_m,
         per_core_N=per_core_n,
@@ -174,33 +255,30 @@ def tuned_projection_matmul_configs(
         fused_activation=None,
         fuse_batch=True,
     )
-    return input_projection, output_projection
 
 
-def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
-    """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
-    # Fixed production/proxy geometries; native worker capacity is validated by
-    # the recurrence constructor for the actual TP-local head count and device.
-    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
-    if active_seq_len_local not in group_chunks:
-        raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
+def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
+    """Return the production K3 program configuration with caller-owned per-axis CCL topology.
+
+    Nothing in it depends on the sequence length: the summary groups and the projection schedules are derived from
+    each layer's geometry at construction.
+    """
     return KDAProgramConfig(
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
-        # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
+        # overhead and requires batch_heads * P worker owners. K3 uses grouped scan.
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped",
-            summary_group_chunks=group_chunks[active_seq_len_local],
-            # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
-            high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+            # Galaxy SP8xTP4: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather, whose size does not
+            # depend on the sequence length. Taken only with one group per head and enough SP links.
+            high_bw_prefix_gather=True,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
-        tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        tuned_projection_matmuls=True,
     )
 
 

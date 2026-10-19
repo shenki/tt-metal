@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
+    KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE,
     KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
@@ -25,7 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     decay_projection_program_config,
     l1_when_it_fits,
-    tuned_projection_matmul_configs,
+    projection_matmul_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -239,15 +240,30 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        grid = mesh_device.compute_with_storage_grid_size()
         self.input_projection_program_config, self.output_projection_program_config = (
-            tuned_projection_matmul_configs(
-                mesh_device.compute_with_storage_grid_size(),
-                self.active_seq_len_local,
-                self.weights.input_projection.shape[-1],
-                *tuple(self.weights.output_projection.shape)[-2:],
+            (
+                projection_matmul_config(
+                    grid, self.active_seq_len_local, *tuple(self.weights.input_projection.shape)[-2:]
+                ),
+                projection_matmul_config(
+                    grid, self.active_seq_len_local, *tuple(self.weights.output_projection.shape)[-2:]
+                ),
             )
             if program_config.tuned_projection_matmuls
             else (None, None)
+        )
+        # The derived schedule writes the projection to L1 when it fits: it is only read back by this layer (the QKV,
+        # decay, beta and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K
+        # block, outside the compute.
+        self.input_projection_memory_config = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if self.input_projection_program_config is None
+            else l1_when_it_fits(
+                mesh_device,
+                self.active_seq_len_local * self.weights.input_projection.padded_shape[-1] * 2,
+                KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE,
+            )
         )
         # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
         decay_width = self.config.num_heads * self.config.head_k_dim
@@ -368,16 +384,11 @@ class ttKDA:
         """Run the fused input projection and locate its semantic columns."""
         config = self.config
         weights = self.weights
-        # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV, decay, beta
-        # and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K block,
-        # outside the compute.
         projected = ttnn.linear(
             hidden_states,
             weights.input_projection,
             program_config=self.input_projection_program_config,
-            memory_config=(
-                ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
-            ),
+            memory_config=self.input_projection_memory_config,
             compute_kernel_config=self.input_projection_compute_config,
         )
         auxiliary_start = self._convolution_width

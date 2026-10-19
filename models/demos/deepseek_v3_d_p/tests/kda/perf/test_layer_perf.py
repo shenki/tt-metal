@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    GALAXY_CHUNK_SEQUENCES,
     KimiK3TestCase,
     LayerNrmseThresholds,
     check_kimi_k3_accuracy,
@@ -362,3 +363,72 @@ def test_synthetic_kimi_k3_perf(
             "the Galaxy reference assumes the TP ring"
         )
     _assert_synthetic_performance(layout, median_wall_ms)
+
+
+# Galaxy SP8xTP4 trace time must stay under a line in the chunk length: a fixed floor (the input projection streams its
+# 178 MB bf16 weight at every length) plus a per-token cost. The line sits 8-43% above every measured length from 1k to
+# 11k (1.10 ms at 1k, 3.02 ms at 10k, 3.67 ms at 11k), so a cliff such as main's 8.9 ms at T=7168 fails it.
+_GALAXY_SCALING_FLOOR_MS = 1.0
+_GALAXY_SCALING_MS_PER_1K_TOKENS = 0.27
+
+
+def _galaxy_scaling_bound_ms(sequence: int) -> float:
+    return _GALAXY_SCALING_FLOOR_MS + _GALAXY_SCALING_MS_PER_1K_TOKENS * sequence / 1024
+
+
+@pytest.mark.parametrize(
+    "mesh_device,tensor_parallel_axis,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            1,
+            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-torus-xy",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("sequence", GALAXY_CHUNK_SEQUENCES, ids=lambda sequence: f"T{sequence // 1024}k")
+def test_synthetic_kimi_k3_sequence_scaling(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+    device_params: dict,
+    sequence: int,
+) -> None:
+    """Build and time the production K3 layer at every Galaxy chunk length; time must scale linearly.
+
+    Like the Galaxy gate, the request starts mid-device, so every full chunk wraps onto its first rank.
+    """
+    mesh_shape = tuple(mesh_device.shape)
+    sequence_parallel_axis = 1 - tensor_parallel_axis
+    layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
+    local_rows = sequence // mesh_shape[sequence_parallel_axis]
+    actual_start = 4 * local_rows + local_rows // 2 // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+    case = make_synthetic_kimi_k3_test_case(sequence=sequence)
+    layer, hidden_tt = make_kimi_k3_device_case(
+        mesh_device,
+        case,
+        tensor_parallel_axis=tensor_parallel_axis,
+        cache_weights=False,
+    )
+    samples_ms, _ = _trace_wall_samples_ms(
+        mesh_device, layer, hidden_tt, _REPETITIONS, actual_start=actual_start, actual_end=actual_start + sequence
+    )
+    median_wall_ms = statistics.median(samples_ms)
+    result = {
+        "fabric_config": ttnn.get_fabric_config().name,
+        "layout": layout,
+        "sequence": sequence,
+        "local_rows": local_rows,
+        "actual_start": actual_start,
+        "trace_wall_samples_ms": samples_ms,
+        "median_trace_wall_ms": median_wall_ms,
+        "us_per_token": median_wall_ms * 1e3 / sequence,
+    }
+    print("KDA_SCALING_PERF=" + json.dumps(result, sort_keys=True))
+    bound_ms = _galaxy_scaling_bound_ms(sequence)
+    assert median_wall_ms <= bound_ms, (
+        f"{layout} T={sequence} median trace wall {median_wall_ms:.3f} ms is above the linear-scaling bound "
+        f"{bound_ms:.3f} ms ({_GALAXY_SCALING_FLOOR_MS} ms + {_GALAXY_SCALING_MS_PER_1K_TOKENS} ms per 1k tokens)"
+    )
