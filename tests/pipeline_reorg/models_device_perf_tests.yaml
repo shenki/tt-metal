@@ -53,11 +53,12 @@
 - name: "ttnn eltwise generated bf16 gelu"
   cmd: >-
     pytest --timeout 120 -s -v
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_bfloat8_b
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_exhaustive_inputs
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_nonfinite_inputs
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_unflushed_zero_and_subnormal_inputs
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_with_sqrt_in_sfpu_chain
   skus:
-    wh_n300_civ2:
-      timeout: 2
     bh_p150b_civ2:
       timeout: 2
   team: ttnn

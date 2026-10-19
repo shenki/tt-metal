@@ -201,8 +201,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     return result;
 }
 
-void init_gelu_bf16();
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -223,9 +221,6 @@ void gelu_init() {
         sfpu_reciprocal_init<false>();
     }
     // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
-        init_gelu_bf16();
-    }
 }
 
 template <int ITERATIONS>
@@ -297,20 +292,14 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     0.0f,
     -6.7350725691e-12f};
 
-bool bf16_dest_gelu();
-template <int ITERATIONS>
-void calculate_gelu_bf16();
 // Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
-inline constexpr bool gelu_bf16_whole_tile = true;
+inline constexpr bool gelu_bf16_whole_tile = false;
+// The stock gelu kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void gelu_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
-        if (bf16_dest_gelu()) {
-            calculate_gelu_bf16<ITERATIONS>();
-            return;
-        }
-    }
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();
     } else if constexpr (is_fp32_dest_acc_en) {
@@ -322,7 +311,9 @@ inline void calculate_gelu() {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
-            sfpi::vFloat result = 0.0f;  // default 0 for x <= GELU_SAT
+            // Default for lanes that fail `x > GELU_SAT` below. x - x is 0 for finite x and NaN for
+            // NaN, so a negative NaN (which also fails the compare) still propagates (#59247).
+            sfpi::vFloat result = x - x;
             v_if(x > GELU_SAT) {
                 sfpi::vFloat scaled = x * INV_SQRT2;
                 scaled = sfpi::min(scaled, 10.0f);
@@ -628,5 +619,3 @@ inline void gelu_derivative_polynomial_init() {
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_gelu_bf16.h"
