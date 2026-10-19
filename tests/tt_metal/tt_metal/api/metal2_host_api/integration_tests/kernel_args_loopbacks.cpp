@@ -484,11 +484,13 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "internal/tensor/transfer_noc_addr.h"
 void kernel_main() {
     const uint32_t named0 = get_arg(args::named0);
     const uint32_t named1 = get_arg(args::named1);
     TensorAccessor acc(tensor::io);
-    const uint32_t tensor_base = acc.get_bank_base_address();
+    // Raw: the base itself is reported to the host for comparison.
+    const uint32_t tensor_base = tensor_accessor::detail::TransferAccess::bank_base(acc);
     const uint32_t page_size = acc.get_aligned_page_size();  // binding's 2nd CRTA word (dynamic_tensor_shape)
     Scratchpad<uint32_t> pad(scratch::pad);
     // Raw address: the base is reported to the host for comparison.
