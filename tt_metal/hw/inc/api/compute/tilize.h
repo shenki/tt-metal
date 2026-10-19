@@ -65,10 +65,15 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 #else
-    // Quasar tilizes the whole row of `block` tiles in one MOP run per tilize_block call (#42757); math and pack
-    // below stay per tile, as on BH/WH.
+    // Quasar tilizes the row of `block` tiles in MOP runs inside the wrapper (#42757): one run into SrcA, or one DEST
+    // section per run with UnpackToDestEn. Math and pack stay per tile, as on BH/WH.
     UNPACK((llk_unpack_tilize_init(icb, block)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    // With UnpackToDestEn the unpacker tilizes straight into DEST and math only forwards each section.
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(icb)));
     // Quasar llk_pack packs through the buffer descriptor programmed by the last llk_pack_init, so
     // re-point the packer at ocb here; otherwise tilize_block writes into the previous output DFB.
     PACK((llk_pack_init(ocb)));
@@ -155,25 +160,43 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
  */
 // clang-format on
+// Tiles per DEST section in tilize_block: one, except Quasar unpack-to-dest, where the unpacker fills a section per
+// run.
+#ifdef ARCH_QUASAR
+constexpr uint32_t tilize_section_tiles =
+    UnpackToDestEn
+        ? ckernel::trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>()
+        : 1;
+#else
+constexpr uint32_t tilize_section_tiles = 1;
+#endif
+
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
-    for (uint32_t t = 0; t < block; t++) {
+    for (uint32_t t = 0; t < block; t += tilize_section_tiles) {
+        const uint32_t chunk = block - t < tilize_section_tiles ? block - t : tilize_section_tiles;
         // Acquire dst
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
+        // Datacopy (with unpack-to-dest the unpacker wrote DEST and math only forwards the section)
+        for (uint32_t i = 0; i < chunk; i++) {
+            MATH((llk_math_eltwise_unary_datacopy<
+                  DataCopyType::A2D,
+                  is_fp32_dest_acc_en,
+                  BroadcastType::NONE,
+                  UnpackToDestEn>(i /*dst index*/, icb)));
 #ifndef ARCH_QUASAR
-        // Datacopy
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
-            0 /*dst index*/, icb)));
-        PACK((llk_pack<is_fp32_dest_acc_en, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
+            PACK((llk_pack<is_fp32_dest_acc_en, true, PackMode::Default>(
+                i /*tile index*/, ocb, output_tile_index + t + i)));
 #else
-        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
-        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
+            PACK((llk_pack<true /*out_of_order*/>(i /*tile index*/, ocb, output_tile_index + t + i)));
 #endif
+        }
+
         // Release dest
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));

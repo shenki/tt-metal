@@ -7,12 +7,23 @@
 #include "llk_assert.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
+#include "llk_unpack_tilize_to_dest.h"
 #include "llk_unpack_reduce_col_tilizeA_strided.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK TILIZE
  *************************************************************************/
+
+/**
+ * @brief Tiles per unpack-to-dest tilize chunk: a row of full_ct_dim tiles is tilized in chunks of up to one DEST
+ *        section, each chunk its own section.
+ */
+inline constexpr std::uint32_t llk_unpack_tilize_to_dest_chunk(const std::uint32_t full_ct_dim) {
+    constexpr std::uint32_t section_tiles =
+        ckernel::trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>();
+    return full_ct_dim < section_tiles ? full_ct_dim : section_tiles;
+}
 
 /**
  * @brief Initializes the unpacker for tilize operations on Quasar.
@@ -27,6 +38,10 @@
  * One init burns 1 unpack-partition id — the standard wrap contract (re-init before re-execute)
  * applies.
  *
+ * With UnpackToDestEn the operand is tilized straight into DEST through UNP_DEST, as llk_unpack_A routes on the same
+ * kernel-wide flag. 32x32 tiles only on that path, in runs of llk_unpack_tilize_to_dest_chunk tiles, the DEST section
+ * capacity: llk_unpack_tilize_block makes every run its own DEST section.
+ *
  * @param operand       The input dataflow buffer identifier.
  * @param full_ct_dim   Number of tiles in a full row of the input tensor, the row llk_unpack_tilize_block tilizes.
  */
@@ -40,7 +55,13 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
             (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
-    if (tensor_shape.total_num_faces() == NUM_FACES) {
+    if constexpr (UnpackToDestEn) {
+        LLK_ASSERT(
+            tensor_shape.total_num_faces() == NUM_FACES, "unpack-to-dest tilize supports only 32x32 tiles on Quasar");
+        const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        _llk_unpack_tilize_to_dest_init_(
+            bfd_id, full_ct_dim, llk_unpack_tilize_to_dest_chunk(full_ct_dim), tensor_shape);
+    } else if (tensor_shape.total_num_faces() == NUM_FACES) {
         const std::uint8_t bfd_id = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
         _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
             bfd_id, full_ct_dim, full_ct_dim /*block_ct_dim*/, tensor_shape);
@@ -54,11 +75,14 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 }
 
 /**
- * @brief Tilizes one row of block_c_tiles tiles from L1 row-major layout into SrcA in a single MOP run.
+ * @brief Tilizes one row of block_c_tiles tiles from L1 row-major layout in MOP runs.
  *
- * Computes the L1 face index from the DFB read position and the input tile index, then runs the MOP
- * configured by llk_unpack_tilize_init, which sized it to full_ct_dim tiles: block_c_tiles must be that
- * full_ct_dim.
+ * Computes the L1 face index from the DFB read position and the input tile index, then runs the MOP configured by
+ * llk_unpack_tilize_init, which sized it from full_ct_dim: block_c_tiles must be that full_ct_dim. Into SrcA the row
+ * is one run. With UnpackToDestEn every run of llk_unpack_tilize_to_dest_chunk(block_c_tiles) tiles is its own DEST
+ * section: wait for a free bank, tilize the run into DEST tiles 0.. of the section, hand the section to math. That is
+ * the cadence of tilize_block's math/pack loop, which forwards and packs one run per section, so this is the unpack
+ * half of that loop (tilize_block takes no tile_regs_* calls).
  *
  * @param operand          The input dataflow buffer identifier.
  * @param block_c_tiles    Number of tiles in one block row (the init's full_ct_dim).
@@ -99,7 +123,19 @@ inline void llk_unpack_tilize_block(
     // face index carries, the bound the per-tile loop used to assert on every tile.
     LLK_ASSERT(offset + block_c_tiles <= (1u << 11), "tile row exceeds the 11 bits the src face index can carry");
 
-    if (tensor_shape.total_num_faces() == NUM_FACES) {
+    if constexpr (UnpackToDestEn) {
+        const std::uint32_t chunk = llk_unpack_tilize_to_dest_chunk(block_c_tiles);
+        _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, l1_base_idx);
+        for (std::uint32_t t = 0; t < block_c_tiles; t += chunk) {
+            llk_unpack_wait_for_dest_available();
+            if (block_c_tiles - t >= chunk) {
+                _llk_unpack_tilize_to_dest_(t + offset, 0 /*dst_tile_idx*/);
+            } else {
+                _llk_unpack_tilize_to_dest_tail_(t + offset, 0 /*dst_tile_idx*/);
+            }
+            llk_unpack_dest_section_done<DST_ACCUM_MODE>();
+        }
+    } else if (tensor_shape.total_num_faces() == NUM_FACES) {
         // The previous row's run may still be reading TILIZE_SRC_ADDR_OFFSET: drain UNPACK0 before rewriting it.
         _llk_stall_cfg_on_<p_stall::UNPACK0>();
         _llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx);
