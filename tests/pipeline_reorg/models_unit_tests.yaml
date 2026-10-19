@@ -1611,6 +1611,22 @@
   team: models
   budget_type: unit
 
+# Probe, not a model test: checks /mnt/weka (and /mnt/models for comparison) is mounted and
+# readable on the control pod and every worker. Dispatch with model=exabox-mount-probe.
+- name: "Exabox mount probe"
+  cmd: |
+    export PROBE_READ_FILE=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized/config.json
+    tests/scripts/multihost/probe_mount.sh /mnt/weka /mnt/models
+  model: exabox-mount-probe
+  model_family: Infra
+  skus:
+    bh_sc1:
+      timeout: 10
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
 - name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
     export TT_METAL_WATCHER=30

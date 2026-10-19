@@ -392,7 +392,7 @@ models:
     bh_p150: 20
     bh_quietbox_2: 502
     bh_galaxy: 75
-    bh_sc1: 370
+    bh_sc1: 380
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
