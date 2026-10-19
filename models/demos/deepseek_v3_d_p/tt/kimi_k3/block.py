@@ -186,8 +186,8 @@ class TtKimiK3Block(LightweightModule):
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
         mla = getattr(self.attention, "mla", None)
-        if mla is not None and hasattr(mla, "release_sparse_mla_overlap_manager"):
-            mla.release_sparse_mla_overlap_manager()
+        if mla is not None and hasattr(mla, "release_overlap_managers"):
+            mla.release_overlap_managers()
 
     def forward(
         self,

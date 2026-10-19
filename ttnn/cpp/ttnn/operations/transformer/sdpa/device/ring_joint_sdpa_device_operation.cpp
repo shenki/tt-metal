@@ -557,8 +557,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.has_k_expand()) {
         // MLA expanded K: one shared latent K head, per-head V, streaming compute on the chunked/causal path.
-        // Everything else (joint, packed or latent V, sinks, sliding or circular KV, split KV, balanced, B > 1) is
-        // outside the supported domain.
+        // Everything else (joint, packed or latent V, sinks, sliding or circular KV, split KV, balanced, segmented
+        // accumulation, B > 1) is outside the supported domain. The schedule must give head pairs, which depends on the
+        // core grid's work split: the program factory checks it.
         const auto& weight = tensor_args.k_expand_weight.value();
         const auto& q_shape = input_tensor_q.logical_shape();
         const auto& k_shape = tensor_args.input_k.logical_shape();
@@ -569,16 +570,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !args.has_sliding_window() && !args.circular_kv_cache && args.kv_stripe_split == 1 && !args.is_balanced,
             "RingJointSDPA k_expand_weight supports neither sliding/circular KV, split KV nor balanced attention");
+        TT_FATAL(
+            !(args.program_config.has_value() && args.program_config->segmented_accumulation),
+            "RingJointSDPA k_expand_weight does not support segmented_accumulation");
         TT_FATAL(q_shape[0] == 1, "RingJointSDPA k_expand_weight requires batch 1, got {}", q_shape[0]);
         TT_FATAL(k_shape[1] == 1, "RingJointSDPA k_expand_weight requires one shared K head, got {}", k_shape[1]);
-        TT_FATAL(
-            q_shape[3] > kKExpandNopeDim && k_shape[3] == kKExpandLatentDim + (q_shape[3] - kKExpandNopeDim),
-            "RingJointSDPA k_expand_weight: Q must be [q_nope ({}) | q_pe] and K [c_kv ({}) | k_pe] with matching PE "
-            "widths. Got Q: {}, K: {}",
-            kKExpandNopeDim,
-            kKExpandLatentDim,
-            q_shape[3],
-            k_shape[3]);
         TT_FATAL(
             !get_fp32_dest_acc_en(args.compute_kernel_config),
             "RingJointSDPA k_expand_weight requires streaming compute; set fp32_dest_acc_en=false");
@@ -591,15 +587,34 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             weight.dtype(),
             weight.layout(),
             weight.memory_config());
+        // The geometry comes from W_UK: [1, NH, nope, latent]. Each core of a head pair expands half the no-PE tile
+        // rows.
         const auto& w_shape = weight.logical_shape();
         TT_FATAL(
-            w_shape.rank() == 4 && w_shape[0] == 1 && w_shape[1] == q_shape[1] && w_shape[2] == kKExpandNopeDim &&
-                w_shape[3] == kKExpandLatentDim,
-            "W_UK must be [1, {}, {}, {}] (W_UK per local Q head, wkv_b1 as stored), got {}",
+            w_shape.rank() == 4 && w_shape[0] == 1 && w_shape[1] == q_shape[1],
+            "W_UK must be [1, {}, nope, latent] (W_UK per local Q head, wkv_b1 as stored), got {}",
             q_shape[1],
-            kKExpandNopeDim,
-            kKExpandLatentDim,
             w_shape);
+        const uint32_t nope = w_shape[2];
+        const uint32_t latent = w_shape[3];
+        // Each pair core expands own_rows no-PE tile rows in DST blocks of min(own_rows, DST) rows, which must divide
+        // own_rows (sdpa_expand_k_chunk); a power of two does for every DST size.
+        const uint32_t own_rows = nope / (2 * tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            nope % (2 * tt::constants::TILE_HEIGHT) == 0 && own_rows > 0 && (own_rows & (own_rows - 1)) == 0 &&
+                latent % tt::constants::TILE_WIDTH == 0,
+            "W_UK [{} x {}]: each head pair core needs a power-of-two count of whole no-PE tile rows, and the latent "
+            "whole tiles",
+            nope,
+            latent);
+        TT_FATAL(
+            q_shape[3] > nope && k_shape[3] == latent + (q_shape[3] - nope),
+            "RingJointSDPA k_expand_weight: Q must be [q_nope ({}) | q_pe] and K [c_kv ({}) | k_pe] with matching PE "
+            "widths. Got Q: {}, K: {}",
+            nope,
+            latent,
+            q_shape[3],
+            k_shape[3]);
     }
 
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};

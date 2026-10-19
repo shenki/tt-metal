@@ -56,7 +56,6 @@ class TpLatentPrefetchResources:
     manager_id: object
     sdpa_subdevice_id: ttnn.SubDeviceId
     gather_subdevice_id: ttnn.SubDeviceId
-    sdpa_core_grid: ttnn.CoreRangeSet
     gather_core_grid: ttnn.CoreRangeSet
     ready_semaphore: object
     data_valid_semaphore: object
@@ -78,7 +77,7 @@ def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
 
 
 def clear_tt_ccl_cache():
-    """Release registered sparse-MLA managers, then clear the cache (for testing)."""
+    """Release the registered sparse-MLA and TP latent prefetch managers, then clear the cache (for testing)."""
     for tt_ccl in _tt_ccl_cache.values():
         tt_ccl.release_sparse_mla_overlap_manager()
         tt_ccl.release_tp_latent_prefetch_manager()
@@ -166,8 +165,8 @@ class TT_CCL:
         # signature. One set for the whole model. See get_mla_ring_attention_buffers.
         self.mla_ring_attention_buffers: dict[tuple, dict] = {}
 
-        # Persistent chunked-prefill (ring_mla) gathered-KV scratch buffers shared by every layer's
-        # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
+        # Persistent chunked-prefill scratch shared by every layer's MLA (the ring_joint SDPA's gathered K/V and the
+        # TP latent slots), keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
         # Persistent full-capacity sparse-MLA KV-prefix gather buffers shared by every layer's MLA.
@@ -422,7 +421,6 @@ class TT_CCL:
             manager_id=manager_id,
             sdpa_subdevice_id=ttnn.SubDeviceId(0),
             gather_subdevice_id=ttnn.SubDeviceId(1),
-            sdpa_core_grid=sdpa_core_grid,
             gather_core_grid=gather_core_grid,
             ready_semaphore=ready_semaphore,
             data_valid_semaphore=data_valid_semaphore,
@@ -535,14 +533,14 @@ class TT_CCL:
         self.mla_ring_attention_buffers[key] = buffers
         return buffers
 
-    def get_mla_chunked_v_buffer(self, *, seq_len, num_heads, v_head_dim, tp_axis, dtype=ttnn.bfloat8_b):
+    def get_mla_chunked_v_buffer(self, *, seq_len, num_heads, v_head_dim, tp_axis):
         """Gathered per-head V scratch for chunked prefill with V unrolled ahead of the SDPA, TP-sharded on heads."""
         import torch
 
         tp = self.mesh_device.shape[tp_axis]
         assert num_heads % tp == 0, f"num_heads={num_heads} not divisible by tp={tp}"
 
-        key = ("v", seq_len, num_heads, v_head_dim, tp_axis, dtype)
+        key = ("v", seq_len, num_heads, v_head_dim, tp_axis)
         if key not in self.mla_chunked_kv_buffers:
             shard_dims = [None, None]
             shard_dims[tp_axis] = 1
@@ -550,7 +548,7 @@ class TT_CCL:
                 torch.zeros(1, num_heads, seq_len, v_head_dim),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
@@ -558,22 +556,21 @@ class TT_CCL:
             )
         return self.mla_chunked_kv_buffers[key]
 
-    def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
-        """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by
-        the chunked-prefill ring_mla op (persistent_output_buffer_kv). It's scratch -- each layer's
-        gather overwrites it, it holds no per-layer state -- and uniform across layers (cache_batch =
-        slot_num*layer_num, seq_len, mesh are all fixed for a model), so one buffer is shared by every
-        layer's MLA instead of re-allocating a full slot_num*layer_num buffer per layer. Replicated
-        across the mesh ([None, None]); cached by shape signature."""
+    def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim):
+        """Lazily allocate (once per mesh) and return the gathered-K (latent kvpe) scratch buffer used by
+        the chunked-prefill ring_joint SDPA (persistent_output_buffer_k). It's scratch -- each layer's
+        gather overwrites it, it holds no per-layer state -- and uniform across layers (seq_len and mesh
+        are fixed for a model), so one buffer is shared by every layer's MLA instead of re-allocated per
+        layer. Replicated across the mesh ([None, None]); cached by shape signature."""
         import torch
 
-        key = (cache_batch, seq_len, kvpe_dim, dtype)
+        key = (cache_batch, seq_len, kvpe_dim)
         if key not in self.mla_chunked_kv_buffers:
             self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
                 torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
@@ -581,7 +578,7 @@ class TT_CCL:
             )
         return self.mla_chunked_kv_buffers[key]
 
-    def get_mla_tp_latent_slot(self, *, seq_len, kvpe_dim, sp_axis, tp_axis, dtype=ttnn.bfloat8_b, index=0):
+    def get_mla_tp_latent_slot(self, *, seq_len, kvpe_dim, sp_axis, tp_axis, index=0):
         """One user/layer slot of the latent cache, TP-gathered from a TP-deduped cache into the TP-replicated
         layout (SP-sharded on dim 2, global row c*chunk + s*chunk_local + t*region + r at local row
         c*chunk_local + t*region + r). Unrolled-V expands V from it and ring_joint reads its K from it. Two of them,
@@ -590,7 +587,7 @@ class TT_CCL:
         (K-chunk rounding) start finite."""
         import torch
 
-        key = ("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, dtype, index)
+        key = ("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, index)
         if key not in self.mla_chunked_kv_buffers:
             shard_dims = [None, None]
             shard_dims[sp_axis] = 2
@@ -598,7 +595,7 @@ class TT_CCL:
                 torch.zeros(1, 1, seq_len, kvpe_dim, dtype=torch.bfloat16),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims

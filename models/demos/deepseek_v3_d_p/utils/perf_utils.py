@@ -208,11 +208,10 @@ def ops_in_signposted_region(df, between_signposts: tuple[str, str], filename: s
             f"between_signposts={between_signposts!r}: expected one region per profiling run, found "
             f"starts={starts}, stops={stops} in {filename}; pin every -k axis to one test of one forward"
         )
-    # CSV rows are in host-dispatch order; +1 at the start, -1 at the stop. A row is "inside" when the running depth
-    # is > 0. The start row itself raises depth to 1, so it is excluded only by ~sp (signpost rows are never device
-    # ops); the stop row drops depth to 0.
-    depth = (is_start.astype(int) - is_stop.astype(int)).cumsum()
-    inside = df[(depth > 0) & ~sp]
+    # CSV rows are in host-dispatch order: the region is the rows strictly between the two signposts, less any other
+    # signpost rows (never device ops). A stop before the start leaves it empty.
+    start, stop = int(is_start.to_numpy().argmax()), int(is_stop.to_numpy().argmax())
+    inside = df.iloc[start + 1 : stop][~sp.iloc[start + 1 : stop].to_numpy()]
     if inside.empty:
         pytest.fail(f"between_signposts={between_signposts!r} matched no device rows in {filename}")
     return inside

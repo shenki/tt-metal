@@ -16,9 +16,10 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 # Kimi K2.7 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
 # MLA_START signpost, so only the single forward is timed.
 #
-# Every axis must be pinned: run_device_perf profiles the whole -k selection into one CSV and the
-# signpost filter keeps every MLA_START/MLA_END region, so an unpinned axis multiplies the total
-# (scalar / metadata x no / with determinism, whose with_determinism case runs 3 forwards, sums 8).
+# Every axis must be pinned: run_device_perf profiles the whole -k selection into one CSV, and the
+# merge fails unless that CSV holds exactly one MLA_START/MLA_END region.
+# sp_only isolates the SDPA from the TP latent gather; the default tp_sharded layout is gated in traced replays by
+# test_mla.py::test_mla_chunked_tp_sharded_traced_perf (overhead vs sp_only) and end to end by the Blaze prefill legs.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} "
@@ -49,9 +50,6 @@ _CMD_K3_CHUNKED_8X4 = (
 # Same 50k+5k scenario and mesh as the two Kimi rows, so the three are comparable per forward.
 # RingJointSDPA is the only op in a Mistral4 layer that grows with KV depth, so it is the lever for
 # long context.
-#
-# Every axis must be pinned: run_device_perf profiles the whole -k selection into one CSV and the
-# signpost filter keeps every MLA_START/MLA_END region, so an unpinned axis multiplies the total.
 _CMD_MISTRAL4_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} "
     "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism and sp_only'"
@@ -110,7 +108,7 @@ def test_kimi_mla_chunked_perf_galaxy():
     run_model_device_perf_test_with_merge(
         command=_CMD_CHUNKED_8X4,
         # One forward, TorusXY Galaxy (DDR 14000), 2026-10-18, expanded K default-on: median of 4.080 / 4.102 / 4.089
-        # ms. main's ring_mla measures 6.43 ms on the same host. The previous 7_118_649 was unwrapped FABRIC_2D.
+        # ms. main's ring_mla measures 6.43 ms on the same host.
         expected_device_perf_ns_per_iteration=4_088_524,
         subdir="deepseek_v3_mla",
         model_name="kimi_mla_chunked_glx_8x4",
@@ -130,12 +128,6 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
     (640 tokens/chip, H_loc=24). Same scenario/mesh as test_kimi_mla_chunked_perf_galaxy; both time one forward.
 
-    Per forward, 2026-08-04: K3 11_562_468 vs K2.6 6_984_119 (+65.5%). That delta is NOT mostly the
-    gate: RingJointSDPA accounts for +4_044_046 of the +4_576_289, with g_proj and its TP all-gather
-    only ~10%. SDPA is 86% of the forward, and its utilisation drops 67.1% -> 59.6% going H_loc
-    16 -> 24 (ideal work scales exactly 1.5x, measured 1.689x) -- 12.6% efficiency lost at identical
-    shapes/grid/fidelity. Worth a targeted look before treating this baseline as the floor.
-
     This stays a ground-truth 8x4 measurement; a local 2x4 extrapolation would ignore g_proj and its
     all-gather and read optimistic.
     """
@@ -148,8 +140,7 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
     run_model_device_perf_test_with_merge(
         command=_CMD_K3_CHUNKED_8X4,
         # One forward, TorusXY Galaxy (DDR 14000), 2026-10-18, expanded K default-on: median of 5.883 / 5.870 / 5.896
-        # ms. main's ring_mla measures 9.86 ms on the same host. The previous 11_562_468 (2026-08-04) was unwrapped
-        # FABRIC_2D.
+        # ms. main's ring_mla measures 9.86 ms on the same host.
         expected_device_perf_ns_per_iteration=5_882_912,
         subdir="kimi_k3_mla",
         model_name="kimi_k3_mla_chunked_glx_8x4",

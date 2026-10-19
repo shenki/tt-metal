@@ -821,7 +821,7 @@ def test_glm53_sparse_mla_overlap_matches_serial(
         )
         ttnn.synchronize_device(mesh_device)
     finally:
-        mla.release_sparse_mla_overlap_manager()
+        mla.release_overlap_managers()
 
     for run, overlapped in (("cold", overlapped_cold), ("warm", overlapped_warm)):
         passed, pcc = comp_pcc(serial, overlapped, 0.999)
@@ -931,7 +931,7 @@ def test_glm53_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
         assert mesh_device.num_program_cache_entries() == cached_entries
     finally:
         mla._sparse_mla_overlap = resources
-        mla.release_sparse_mla_overlap_manager()
+        mla.release_overlap_managers()
 
     for run_name, actual_chunks in (("cold", overlapped_cold), ("warm", overlapped_warm)):
         for chunk_idx, (expected, actual) in enumerate(zip(serial, actual_chunks)):

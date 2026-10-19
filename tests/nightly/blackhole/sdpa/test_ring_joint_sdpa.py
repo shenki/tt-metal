@@ -3744,6 +3744,8 @@ def test_ring_joint_attention_chunked_indexed_k_single_slot_v_accuracy():
         q_chunk_sizes=[32],
         k_chunk_sizes=[32],
         seq_len=total_seq_len,
+        indexed_kv_cache=True,
+        v_single_slot=True,
     )
     run_ring_joint_sdpa_chunked(
         mesh_config,
@@ -3754,8 +3756,8 @@ def test_ring_joint_attention_chunked_indexed_k_single_slot_v_accuracy():
         rmse_threshold=DEFAULT_RMSE_THRESHOLD,
         q_chunk_size=model.q_chunk_sizes[0],
         k_chunk_size=model.k_chunk_sizes[0],
-        indexed_nd_sharded_kv_cache=True,
-        v_single_slot=True,
+        indexed_nd_sharded_kv_cache=model.indexed_kv_cache,
+        v_single_slot=model.v_single_slot,
     )
 
 
@@ -3771,8 +3773,8 @@ def test_ring_joint_attention_chunked_unrolled_v_accuracy(q_chunk_size):
         chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
         q_chunk_size=q_chunk_size,
         k_chunk_size=512,
-        indexed_nd_sharded_kv_cache=True,
-        v_single_slot=True,
+        indexed_nd_sharded_kv_cache=model.indexed_kv_cache,
+        v_single_slot=model.v_single_slot,
     )
 
 
@@ -3789,8 +3791,8 @@ def test_ring_joint_attention_chunked_unrolled_v_production_accuracy(model_name)
         chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        indexed_nd_sharded_kv_cache=True,
-        v_single_slot=True,
+        indexed_nd_sharded_kv_cache=model.indexed_kv_cache,
+        v_single_slot=model.v_single_slot,
         max_k_splits=k_splits,
         matmul_math_fidelity=model.matmul_math_fidelity,
     )
@@ -3799,14 +3801,15 @@ def test_ring_joint_attention_chunked_unrolled_v_production_accuracy(model_name)
 @pytest.mark.timeout(1800)
 def test_ring_joint_attention_chunked_unrolled_v_ksplit2_accuracy():
     """K split in two bands (24 heads in q320: 48 units on 5 of 10 rows), beside the production three-band split."""
+    model = UNROLLED_V_CHUNKED_MODEL_CONFIGS["kimi_k3_unrolled_v"]
     run_ring_joint_sdpa_chunked(
         MESH_CONFIG,
-        UNROLLED_V_CHUNKED_MODEL_CONFIGS["kimi_k3_unrolled_v"],
+        model,
         chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
         q_chunk_size=320,
         k_chunk_size=256,
-        indexed_nd_sharded_kv_cache=True,
-        v_single_slot=True,
+        indexed_nd_sharded_kv_cache=model.indexed_kv_cache,
+        v_single_slot=model.v_single_slot,
         max_k_splits=2,
     )
 
@@ -6086,11 +6089,11 @@ RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
 )
 
-# The dense MLA chunked prefill with V unrolled per head, one config per production model at its per-chip shape: K is
-# the latent cache (indexed, keeps its slot), V the per-head 128-wide bfp8 expansion (a single batch-1 slot). Kimi-K3
-# and K2.7 run tp=4 on the Galaxy (96 / 64 heads -> 24 / 16 per chip); Mistral-Small-4 runs tp=1 (32 heads) with a
-# 320-wide K row (256 latent + 64 rope) and LoFi attention. 640 rows per chip either way, so an 8-device ring
-# reproduces each chip's work.
+# The dense MLA chunked prefill with V unrolled per head at each model's per-chip shape: K is the latent cache (indexed,
+# keeps its slot), V the per-head 128-wide bfp8 expansion (a single batch-1 slot). Kimi-K3 and K2.7 (the production
+# users) run tp=4 on the Galaxy (96 / 64 heads -> 24 / 16 per chip). Mistral-Small-4's shape stays as an op sweep
+# point only (tp=1, 32 heads, a 320-wide K row of 256 latent + 64 rope, LoFi attention); the model itself runs ring_mla.
+# 640 rows per chip either way, so an 8-device ring reproduces each chip's work.
 _UNROLLED_V_KIMI = replace(
     RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"],
     name="kimi_k3_unrolled_v",
@@ -7813,8 +7816,8 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
                     qk_configs=[(q_chunk_size, k_chunk_size)],
                     persistent_buffer_mode="exact_per_chunk",
                     do_check=False,
-                    indexed_nd_sharded_kv_cache=True,
-                    v_single_slot=True,
+                    indexed_nd_sharded_kv_cache=model.indexed_kv_cache,
+                    v_single_slot=model.v_single_slot,
                     max_k_splits=k_splits,
                     matmul_math_fidelity=model.matmul_math_fidelity,
                     runtime=runtime,

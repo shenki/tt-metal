@@ -705,7 +705,7 @@ class ttMLA:
         else:
             self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
 
-    def release_sparse_mla_overlap_manager(self) -> None:
+    def release_overlap_managers(self) -> None:
         """Forward shared sparse-MLA and TP latent prefetch overlap teardown to the model-wide TT_CCL owner."""
         self.tt_ccl.release_sparse_mla_overlap_manager()
         self.tt_ccl.release_tp_latent_prefetch_manager()
@@ -1064,15 +1064,8 @@ class ttMLA:
         # Dedup splits the per-chip depth over both axes.
         cache_rows_global = kvpe_cache.storage.shape[2] * self.sp_factor * (self.tp_factor if self.tp_shard_kv else 1)
         if metadata is not None:
-            meta_slot_kwargs = {
-                "slot_id": metadata[0],
-                "kv_actual_isl_tensor": metadata[1],
-                "kv_cache_num_layers": self.layer_num,
-                "kv_cache_layer_idx": cache_layer_idx,
-            }
             ring_logical_n = cache_rows_global  # global cache capacity
         else:
-            meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
             # Capped at the capacity the SDPA accepts: the last chunk's pad rows can sit past the cache
             # end, and only pad rows read them.
             ring_logical_n = min(kv_actual_isl + chunk_size_global, cache_rows_global)
@@ -1115,20 +1108,23 @@ class ttMLA:
             if chain is not None and cache_layer_idx + 1 < stop_layer:
                 # The next layer of this user and chunk: same metadata, the cache slot one layer on.
                 prefetch = dict(gather, cache_batch_idx=cache_batch_idx + 1, cache_layer_idx=cache_layer_idx + 1)
-            if metadata is not None:
-                meta_slot_kwargs = {
-                    "slot_id": self.tt_ccl.get_zero_slot_tensor(),
-                    "kv_actual_isl_tensor": metadata[1],
-                    "kv_cache_num_layers": 1,
-                    "kv_cache_layer_idx": 0,
-                }
-            else:
-                meta_slot_kwargs = {"kv_cache_batch_idx": 0, "kv_actual_isl": kv_actual_isl}
+        # With tp_shard_kv the SDPA reads the single-slot TP latent buffer: slot 0 of a one-layer cache.
+        if metadata is not None:
+            meta_slot_kwargs = {
+                "slot_id": self.tt_ccl.get_zero_slot_tensor() if self.tp_shard_kv else metadata[0],
+                "kv_actual_isl_tensor": metadata[1],
+                "kv_cache_num_layers": 1 if self.tp_shard_kv else self.layer_num,
+                "kv_cache_layer_idx": 0 if self.tp_shard_kv else cache_layer_idx,
+            }
+        else:
+            meta_slot_kwargs = {
+                "kv_cache_batch_idx": 0 if self.tp_shard_kv else cache_batch_idx,
+                "kv_actual_isl": kv_actual_isl,
+            }
         return self._unrolled_v_attn(
             tt_q=tt_q,
             kv_storage=kv_storage,
             prefetch=prefetch,
-            single_slot=self.tp_shard_kv,
             ring_logical_n=ring_logical_n,
             seq_len_local=seq_len_local,
             cache_batch_idx=cache_batch_idx,
@@ -1343,20 +1339,29 @@ class ttMLA:
     _UNROLLED_V_WIDE_LOCAL_HEADS = 24
 
     def _expanded_k_supported(self, required: bool) -> bool:
-        """Expanded K needs the kernel's MLA geometry (latent 512, per-head no-PE 128), no per-position query scale or
-        balanced attention, and a measured chunk schedule for this shape: the absorbed model's chunks are sized for a
-        576-wide K and can overflow L1 beside the expanded K^T CB. Anything else keeps absorbed K when expanded K
-        is the model's default (MLA_ATTENTION_CONFIG), and raises when it was asked for (expanded_k=True)."""
+        """Expanded K needs a no-PE width that gives each head pair core a power-of-two count of whole tile rows (the
+        op's rule), no per-position query scale or balanced attention, and a measured chunk schedule for this shape
+        that gives head pairs (2 Q chunks per head): the absorbed model's chunks are sized for a 576-wide K and can
+        overflow L1 beside the expanded K^T CB. Anything else keeps absorbed K when expanded K is the model's default
+        (MLA_ATTENTION_CONFIG), and raises ValueError when it was asked for (expanded_k=True)."""
         heads_local = self.num_heads // self.tp_factor
         key = (self.kv_lora_rank + self.qk_rope_head_dim, heads_local, self.active_seq_len // self.sp_factor)
+        own_rows = self.qk_nope_head_dim // (2 * ttnn.TILE_SIZE)  # no-PE tile rows each core of a head pair expands
         reasons = [
             reason
             for reason, bad in (
-                (f"kv_lora_rank {self.kv_lora_rank} != 512", self.kv_lora_rank != 512),
-                (f"qk_nope_head_dim {self.qk_nope_head_dim} != 128", self.qk_nope_head_dim != 128),
+                (
+                    f"qk_nope_head_dim {self.qk_nope_head_dim} is not a power-of-two count of whole tile rows per head "
+                    "pair core",
+                    self.qk_nope_head_dim % (2 * ttnn.TILE_SIZE) != 0 or own_rows & (own_rows - 1) != 0,
+                ),
                 ("llama4 query scale", self._llama4_beta is not None),
                 ("balanced attention", self.is_balanced),
                 (f"no measured expanded-K chunk schedule for {key}", key not in self._EXPANDED_K_SDPA_CHUNKS),
+                (
+                    f"expanded-K schedule {self._EXPANDED_K_SDPA_CHUNKS.get(key)} does not give head pairs",
+                    key in self._EXPANDED_K_SDPA_CHUNKS and key[2] != 2 * self._EXPANDED_K_SDPA_CHUNKS[key][0],
+                ),
             )
             if bad
         ]
@@ -1417,11 +1422,11 @@ class ttMLA:
     #   Kimi-K3 (576, 24): q160 = 96 units on 96 cores;
     #   Kimi-K2.7 (576, 16): q320 k256 split three ways = 96 cores, 10% faster SDPA than q128 (80 cores).
     # Shapes not listed fall back to the model below, which is calibrated on the 576-wide K.
-    # Expanded K (docs/expanded_k/PLAN.md): every core still expands its head's whole K chunk (Phase 1), so fewer cores
-    # per head wins. K3 at q320 runs 2 Q chunks per head in 2 K-split bands (each core expands half the heads' K once per
-    # band slice), 12.5-14.6% under absorbed q160/k512 at 50k-512k; k512 does not fit L1 beside the expanded K^T CB.
-    # 2k chunks (256 rows per chip): q128 gives each head 2 Q chunks, so pairs still split the expansion; swept at 512k
-    # HiFi2 (K3 28.7 ms vs 46.2 for 1 band and 32.7 for q256 / 4 bands; K2.7 19.9 vs 25.9 / 24.3); k512 overflows L1.
+    # Expanded K (docs/expanded_k/PLAN.md) runs on head pairs only (the op refuses anything else): each entry gives each
+    # head 2 Q chunks, one per core, and the pair splits every K chunk's expansion. K3 at q320 runs its pairs in 2
+    # K-split bands, 12.5-14.6% under absorbed q160/k512 at 50k-512k; k512 does not fit L1 beside the expanded K^T CB.
+    # 2k chunks (256 rows per chip): q128 gives the 2 Q chunks; swept at 512k HiFi2 (K3 28.7 ms vs 46.2 for 1 band and
+    # 32.7 for q256 / 4 bands; K2.7 19.9 vs 25.9 / 24.3); k512 overflows L1.
     _EXPANDED_K_SDPA_CHUNKS = {
         (576, 24, 640): (320, 256, 2),
         (576, 16, 640): (320, 256, 3),
@@ -1511,7 +1516,6 @@ class ttMLA:
         cache_layer_idx,
         metadata,
         row_align,
-        single_slot=False,
     ):
         """V = latent @ W_UV over the filled local cache rows, written head-major [1, H_local, cap_local, v_head_dim].
         Rows are rounded up to row_align, the SDPA's K chunk: the SDPA reads whole K/V chunks and masks the tail, so
@@ -1521,16 +1525,16 @@ class ttMLA:
         if metadata is not None:
             # metadata[1] is the global prefix length; each chunk (even a partial one) adds seq_len_local rows to
             # every device's cache, so local rows = ceil(prefix / chunk_global) * seq_len_local + seq_len_local.
-            # A single-slot source (the TP-gathered latent) has no user or layer to select.
+            # A single-slot source (the TP-gathered latent, tp_shard_kv) has no user or layer to select.
             rows = ttnn.MinimalMatmulDynamicRows(
                 metadata[1],
-                slot_tensor=None if single_slot else metadata[0],
+                slot_tensor=None if self.tp_shard_kv else metadata[0],
                 divisor=chunk_size_global,
                 multiplier=seq_len_local,
                 addend=seq_len_local,
                 align=row_align,
-                num_layers=1 if single_slot else self.layer_num,
-                layer_idx=0 if single_slot else cache_layer_idx,
+                num_layers=1 if self.tp_shard_kv else self.layer_num,
+                layer_idx=0 if self.tp_shard_kv else cache_layer_idx,
             )
         else:
             local_rows = -(-ring_logical_n // chunk_size_global) * seq_len_local
@@ -1547,7 +1551,9 @@ class ttMLA:
             # No slot tensor: cache_batch_idx already folds (user, layer), so it is the layer index of a cache whose
             # every batch is a layer.
             rows = ttnn.MinimalMatmulDynamicRows(
-                self._expand_v_rows, num_layers=kv_storage.shape[0], layer_idx=0 if single_slot else cache_batch_idx
+                self._expand_v_rows,
+                num_layers=kv_storage.shape[0],
+                layer_idx=0 if self.tp_shard_kv else cache_batch_idx,
             )
         return ttnn.experimental.minimal_matmul(
             kv_storage,
@@ -1566,7 +1572,6 @@ class ttMLA:
         *,
         tt_q,
         kv_storage,
-        single_slot,
         ring_logical_n,
         seq_len_local,
         cache_batch_idx,
@@ -1584,7 +1589,6 @@ class ttMLA:
             cache_layer_idx,
             metadata,
             row_align=k_chunk,
-            single_slot=single_slot,
         )
 
         def sdpa(**kw):
@@ -2625,10 +2629,10 @@ class ttMLA:
     # ----------------------------------------------------------------------------------------
 
     def set_tp_shard_kv(self, tp_shard_kv: Optional[bool], *, tp_latent_prefetch: Optional[bool] = None) -> None:
-        """Sparse always dedups (its gather has no other mode); dense opts in. ring_mla then gathers the split cache over
-        the full mesh; unrolled-V reads it through a TP latent gather ahead of the SP ring (_tp_gather_latent). Weights
-        and buffers do not depend on it, so a built model can switch layout between runs. tp_latent_prefetch, when
-        given, replaces the constructor's choice."""
+        """Sparse always dedups (its gather has no other mode); dense opts in (the Kimi runners do by default, PR #59531).
+        ring_mla then gathers the split cache over the full mesh; unrolled-V reads it through a TP latent gather ahead of
+        the SP ring (_tp_gather_latent). Weights and buffers do not depend on it, so a built model can switch layout
+        between runs. tp_latent_prefetch, when given, replaces the constructor's choice."""
         if tp_latent_prefetch is not None:
             self._tp_latent_prefetch_requested = tp_latent_prefetch
         self._tp_latent_prefetch = False

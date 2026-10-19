@@ -1404,11 +1404,11 @@ inline bool sdpa_packed_first_half_unmasked(
  * c_kv @ W_UK^T (W_UK's tiles transposed in-tile by the same matmul flag), and rows [nope_rows, DHt_qk) are the
  * latent's k_pe tiles, copied. Pops cb_kt_in, pushes cb_kexp.
  *
- * Head groups (group > 1, expanded-K PLAN.md section 3.4): this core expands only its rank's nope_rows / group rows
- * (cb_wuk then holds only those rows of W_UK), also packs them into cb_own for the reader to send to the peer, and
- * copies the peer's rows, which the reader delivers in cb_peer, into the remaining rows of cb_kexp. Every core of the
- * group expands every K chunk the reader delivers, including chunks its own Q chunk then skips as fully masked, since
- * the peer may need them.
+ * Head pairs (expanded-K PLAN.md section 3.4): this core expands only its rank's half of the no-PE rows (cb_wuk holds
+ * only those rows of W_UK), also packs them into cb_own for the reader to send to the peer, and copies the peer's
+ * half, which the reader delivers in cb_peer, into the remaining rows of cb_kexp. Both cores of the pair expand every
+ * K chunk the reader delivers, including chunks its own Q chunk then skips as fully masked, since the peer may need
+ * them.
  *
  * Unpack/pack formats: entered and left in the state sdpa_inner_loop_step assumes on entry (srcA cb_qkt_im, srcB
  * cb_identity_scale_in, pack cb_normalized_out). Matmul maps in0 to srcB and in1 to srcA.
@@ -1424,24 +1424,20 @@ template <
     uint32_t cb_qkt_im,
     uint32_t cb_identity_scale_in,
     uint32_t cb_normalized_out,
-    uint32_t group = 1,
-    uint32_t cb_own = INVALID_CB,
-    uint32_t cb_peer = INVALID_CB>
-static void sdpa_expand_k_chunk(const uint32_t rank = 0) {
+    uint32_t cb_own,
+    uint32_t cb_peer>
+static void sdpa_expand_k_chunk(const uint32_t rank) {
     constexpr uint32_t pe_rows = DHt_k - latent_rows;
     static_assert(DHt_qk > pe_rows, "expanded K needs no-PE rows");
     constexpr uint32_t nope_rows = DHt_qk - pe_rows;
-    constexpr bool grouped = group > 1;
-    static_assert(!grouped || (group == 2 && nope_rows % group == 0), "expanded-K head groups are pairs");
-    constexpr uint32_t own_rows = nope_rows / group;
+    static_assert(nope_rows % 2 == 0, "expanded-K head pairs split the no-PE rows in halves");
+    constexpr uint32_t own_rows = nope_rows / 2;
     const uint32_t own_start = rank * own_rows;
 
     CircularBuffer(cb_kt_in).wait_front(DHt_k * Sk_chunk_t);
     CircularBuffer(cb_wuk).wait_front(own_rows * latent_rows);
     CircularBuffer(cb_kexp).reserve_back(DHt_qk * Sk_chunk_t);
-    if constexpr (grouped) {
-        CircularBuffer(cb_own).reserve_back(own_rows * Sk_chunk_t);
-    }
+    CircularBuffer(cb_own).reserve_back(own_rows * Sk_chunk_t);
 
     reconfig_data_format(cb_qkt_im, cb_wuk, cb_identity_scale_in, cb_kt_in);
     pack_reconfig_data_format(cb_normalized_out, cb_kexp);
@@ -1475,17 +1471,13 @@ static void sdpa_expand_k_chunk(const uint32_t rank = 0) {
             for (uint32_t t = 0; t < rt; ++t) {
                 for (uint32_t c = 0; c < ct; ++c) {
                     pack_tile<true>(t * ct + c, cb_kexp, (own_start + r0 + c) * Sk_chunk_t + kt0 + t);
-                    if constexpr (grouped) {
-                        pack_tile<true>(t * ct + c, cb_own, (r0 + c) * Sk_chunk_t + kt0 + t);
-                    }
+                    pack_tile<true>(t * ct + c, cb_own, (r0 + c) * Sk_chunk_t + kt0 + t);
                 }
             }
             tile_regs_release();
         }
     }
-    if constexpr (grouped) {
-        CircularBuffer(cb_own).push_back(own_rows * Sk_chunk_t);
-    }
+    CircularBuffer(cb_own).push_back(own_rows * Sk_chunk_t);
 
     // The shared k_pe rows, as they are.
     reconfig_data_format_srca(cb_wuk, cb_kt_in);
@@ -1502,28 +1494,25 @@ static void sdpa_expand_k_chunk(const uint32_t rank = 0) {
     }
     sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt_k * Sk_chunk_t);
 
-    constexpr uint32_t last_srca = grouped ? cb_peer : cb_kt_in;
-    if constexpr (grouped) {
-        // The peer's rows (its rank is the other one of the pair).
-        const uint32_t peer_start = (1 - rank) * own_rows;
-        CircularBuffer(cb_peer).wait_front(own_rows * Sk_chunk_t);
-        reconfig_data_format_srca(cb_kt_in, cb_peer);
-        copy_init(cb_peer);
-        for (uint32_t r = 0; r < own_rows; ++r) {
-            for (uint32_t kt = 0; kt < Sk_chunk_t; ++kt) {
-                tile_regs_acquire();
-                copy_tile(cb_peer, r * Sk_chunk_t + kt, 0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile<true>(0, cb_kexp, (peer_start + r) * Sk_chunk_t + kt);
-                tile_regs_release();
-            }
+    // The peer's rows (its rank is the other one of the pair).
+    const uint32_t peer_start = (1 - rank) * own_rows;
+    CircularBuffer(cb_peer).wait_front(own_rows * Sk_chunk_t);
+    reconfig_data_format_srca(cb_kt_in, cb_peer);
+    copy_init(cb_peer);
+    for (uint32_t r = 0; r < own_rows; ++r) {
+        for (uint32_t kt = 0; kt < Sk_chunk_t; ++kt) {
+            tile_regs_acquire();
+            copy_tile(cb_peer, r * Sk_chunk_t + kt, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, cb_kexp, (peer_start + r) * Sk_chunk_t + kt);
+            tile_regs_release();
         }
-        sdpa_cb_pop_front_out_of_line(cb_peer, own_rows * Sk_chunk_t);
     }
+    sdpa_cb_pop_front_out_of_line(cb_peer, own_rows * Sk_chunk_t);
     CircularBuffer(cb_kexp).push_back(DHt_qk * Sk_chunk_t);
 
-    reconfig_data_format(last_srca, cb_qkt_im, cb_kt_in, cb_identity_scale_in);
+    reconfig_data_format(cb_peer, cb_qkt_im, cb_kt_in, cb_identity_scale_in);
     pack_reconfig_data_format(cb_kexp, cb_normalized_out);
 }
 
@@ -2688,15 +2677,14 @@ template <
     // Split-KV: GROUPED_KV_SOURCE_COUNT > 1. Keeps the per-source path free of packed branches.
     bool packed_kv_enabled = false,
     // MLA expanded K (k_expand_weight): Q and the QK are DHt_qk tiles wide while cb_kt_in carries the DHt-wide latent;
-    // each processed K chunk is expanded into cb_kexp (sdpa_expand_k_chunk) with the head's W_UK from cb_wuk, which is
-    // popped with Q. Off (INVALID_CB) everywhere else.
+    // each K chunk is expanded into cb_kexp (sdpa_expand_k_chunk) by a head pair, this core's half with its
+    // k_expand_wuk_tiles of the head's W_UK from cb_wuk, which is popped with Q. The runtime k_expand_rank picks this
+    // core's half. Off (INVALID_CB) everywhere else.
     uint32_t DHt_qk = DHt,
     uint32_t cb_kexp = INVALID_CB,
     uint32_t cb_wuk = INVALID_CB,
     uint32_t k_expand_latent_rows = 0,
-    // Expanded-K head groups (sdpa_expand_k_chunk): pairs of cores split each K chunk's expansion; the runtime
-    // k_expand_rank picks this core's rows. 1 everywhere else.
-    uint32_t k_expand_group = 1,
+    uint32_t k_expand_wuk_tiles = 0,
     uint32_t cb_kexp_own = INVALID_CB,
     uint32_t cb_kexp_peer = INVALID_CB,
     typename MaskCtx = LightweightMaskContext>
@@ -2741,7 +2729,7 @@ void sdpa_ring_v2(
     const uint32_t packed_newest_rows = 0,
     // Padded multicast slots the reader runs after this core's Q chunks; their K/V entries are drained.
     const uint32_t padded_q_slots = 0,
-    // Expanded-K head groups: this core's rank in its pair.
+    // Expanded K: this core's rank in its head pair.
     const uint32_t k_expand_rank = 0) {
     init_sdpa_streaming_semaphores();
     const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
@@ -2892,10 +2880,10 @@ void sdpa_ring_v2(
         if constexpr (is_causal_sdpa) {
             if constexpr (!has_sliding_window) {
                 if (is_causal_iter && k_chunk >= causal_k_limit) {
-                    // Expanded-K head groups expanded this chunk already (the peer may need it): drain that instead.
-                    constexpr bool k_expanded_first = cb_kexp != INVALID_CB && k_expand_group > 1;
-                    constexpr uint32_t k_drain_cb = k_expanded_first ? cb_kexp : cb_kt_in;
-                    constexpr uint32_t k_drain_tiles = (k_expanded_first ? DHt_qk : DHt) * Sk_chunk_t;
+                    // Expanded K expanded this chunk already (the peer may need it): drain that instead.
+                    constexpr bool k_expanded = cb_kexp != INVALID_CB;
+                    constexpr uint32_t k_drain_cb = k_expanded ? cb_kexp : cb_kt_in;
+                    constexpr uint32_t k_drain_tiles = (k_expanded ? DHt_qk : DHt) * Sk_chunk_t;
                     CircularBuffer(k_drain_cb).wait_front(k_drain_tiles);
                     sdpa_cb_pop_front_out_of_line(k_drain_cb, k_drain_tiles);
                     // In-place latent-V never pushes a V entry, so only K^T needs draining.
@@ -3049,11 +3037,12 @@ void sdpa_ring_v2(
                 try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                 continue;
             }
-            // Expanded-K head groups: expand (and exchange) before the per-Q causal skip, since the peer needs this
-            // core's rows even for chunks this core's Q chunk masks out entirely. A skipped chunk then leaves the
-            // expansion's unpack/pack state (restored to the step's assumed formats, single-tile pack width) as the
-            // loop's exit state; whatever follows (the next step, the K-split epilogue) configures its own pack width.
-            if constexpr (cb_kexp != INVALID_CB && k_expand_group > 1) {
+            // Expanded K: expand (and exchange with the head pair's peer) before the per-Q causal skip, since the peer
+            // needs this core's rows even for chunks this core's Q chunk masks out entirely. A skipped chunk then
+            // leaves the expansion's unpack/pack state (restored to the step's assumed formats, single-tile pack
+            // width) as the loop's exit state; whatever follows (the next step, the K-split epilogue) configures its
+            // own pack width.
+            if constexpr (cb_kexp != INVALID_CB) {
                 sdpa_expand_k_chunk<
                     Sk_chunk_t,
                     DHt,
@@ -3065,7 +3054,6 @@ void sdpa_ring_v2(
                     cb_qkt_im,
                     cb_identity_scale_in,
                     cb_normalized_out,
-                    k_expand_group,
                     cb_kexp_own,
                     cb_kexp_peer>(k_expand_rank);
             }
@@ -3299,19 +3287,6 @@ void sdpa_ring_v2(
 
             // Expanded K: the QK reads the per-head K^T chunk built from this latent chunk.
             constexpr bool k_expand = cb_kexp != INVALID_CB;
-            if constexpr (k_expand && k_expand_group == 1) {
-                sdpa_expand_k_chunk<
-                    Sk_chunk_t,
-                    DHt,
-                    DHt_qk,
-                    k_expand_latent_rows,
-                    cb_kt_in,
-                    cb_wuk,
-                    cb_kexp,
-                    cb_qkt_im,
-                    cb_identity_scale_in,
-                    cb_normalized_out>();
-            }
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
                 Sq_chunk_t,
@@ -3406,10 +3381,10 @@ void sdpa_ring_v2(
         if constexpr (!use_l1_state_fifo) {
             if (q_per_core > 1 || is_last_ring_iter) {
                 sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt_qk);
-                // Expanded K: the reader pushes the head's W_UK with every Q push.
+                // Expanded K: the reader pushes this core's W_UK rows with Q. One Q chunk per core (host-checked),
+                // so both leave on the last ring iteration.
                 if constexpr (cb_wuk != INVALID_CB) {
-                    sdpa_cb_pop_front_out_of_line(
-                        cb_wuk, (DHt_qk - (DHt - k_expand_latent_rows)) / k_expand_group * k_expand_latent_rows);
+                    sdpa_cb_pop_front_out_of_line(cb_wuk, k_expand_wuk_tiles);
                 }
             }
         }

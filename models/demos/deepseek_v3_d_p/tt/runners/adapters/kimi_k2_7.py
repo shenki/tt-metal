@@ -44,7 +44,8 @@ class KimiK27Adapter(MLAPrefillAdapter):
     # it. No other model may enable PREFILL_DFLASH.
     supports_dflash = True
 
-    # PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated KV cache.
+    # Default: the KVPE cache is striped over SP*TP and each layer TP-gathers its latent before the ring_joint SDPA
+    # (needs a 2D fabric). PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated KV cache.
     supports_tp_shard_kv = True
     tp_shard_kv_default = True
 

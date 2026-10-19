@@ -37,19 +37,19 @@ void kernel_main() {
     constexpr uint32_t NH = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
-    // Expanded K (k_expand_weight): Q / QK width DHt_qk; DHt stays the latent K's. W_UK of the core's head arrives in
-    // cb_wuk with every Q push and leaves with every Q pop. The latent's no-PE part is kKExpandLatentRows tile rows.
+    // Expanded K (k_expand_weight): Q / QK width DHt_qk; DHt stays the latent K's, whose no-PE part is
+    // kexp_latent_tiles tile rows. The core's head pair splits the expansion: W_UK's wuk_tiles (this core's rows of
+    // its head's W_UK) arrive in cb_wuk with the Q push and leave with the Q pop.
     constexpr bool k_expand = get_named_compile_time_arg_val("k_expand") == 1;
     constexpr uint32_t DHt_qk = get_named_compile_time_arg_val("dht_qk");
     constexpr uint32_t cb_wuk = get_named_compile_time_arg_val("cb_wuk");
+    constexpr uint32_t wuk_tiles = get_named_compile_time_arg_val("wuk_tiles");
+    constexpr uint32_t kexp_latent_tiles = get_named_compile_time_arg_val("kexp_latent_tiles");
     constexpr uint32_t cb_kexp = get_named_compile_time_arg_val("cb_kexp");
-    constexpr uint32_t kKExpandLatentRows = 512 / 32;
-    // Head groups (pairs of cores per head) split the expansion; W_UK then carries only this core's rows.
-    constexpr uint32_t k_expand_group = get_named_compile_time_arg_val("k_expand_group");
     constexpr uint32_t cb_kexp_own = get_named_compile_time_arg_val("cb_kexp_own");
     constexpr uint32_t cb_kexp_peer = get_named_compile_time_arg_val("cb_kexp_peer");
-    constexpr uint32_t wuk_tiles =
-        k_expand ? (DHt_qk - (DHt - kKExpandLatentRows)) / k_expand_group * kKExpandLatentRows : 0;
+    // sdpa_expand_k_chunk's half of the no-PE rows (Q's width past the latent's PE part) over the latent's columns.
+    static_assert(!k_expand || wuk_tiles == (DHt_qk - (DHt - kexp_latent_tiles)) / 2 * kexp_latent_tiles);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t q_local_padded_Nt [[maybe_unused]] = get_compile_time_arg_val(5);
@@ -247,12 +247,11 @@ void kernel_main() {
         (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));
     // The K split never runs with the rotated split, so its runtime arg takes the rotated block's slot.
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
-    // Expanded-K head groups: this core's rank, the last runtime arg (after the rotated pairs or the K-split band).
+    // Expanded-K head pairs: this core's rank, the last runtime arg (after the K-split band). Pairs run without the
+    // rotated split and segmented accumulation (the host refuses both).
+    static_assert(!k_expand || (!rotated_q_split_enabled && !seg_accum_enabled));
     [[maybe_unused]] const uint32_t k_expand_rank =
-        (k_expand && k_expand_group > 1)
-            ? get_arg_val<uint32_t>(
-                  rotated_args_base + (rotated_q_split_enabled ? 2 * ring_size : 0) + (ksplit_enabled ? 1 : 0))
-            : 0;
+        k_expand ? get_arg_val<uint32_t>(rotated_args_base + (ksplit_enabled ? 1 : 0)) : 0;
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
     const bool seg_active = seg_accum_enabled && q_per_core == 1;
     bool seg_state_valid = false;
@@ -670,10 +669,10 @@ void kernel_main() {
                 DHt_qk,
                 k_expand ? cb_kexp : INVALID_CB,
                 k_expand ? cb_wuk : INVALID_CB,
-                k_expand ? kKExpandLatentRows : 0,
-                k_expand ? k_expand_group : 1,
-                (k_expand && k_expand_group > 1) ? cb_kexp_own : INVALID_CB,
-                (k_expand && k_expand_group > 1) ? cb_kexp_peer : INVALID_CB>(
+                k_expand ? kexp_latent_tiles : 0,
+                k_expand ? wuk_tiles : 0,
+                k_expand ? cb_kexp_own : INVALID_CB,
+                k_expand ? cb_kexp_peer : INVALID_CB>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,
@@ -820,9 +819,6 @@ void kernel_main() {
             // The reader pushes Q with this core's first K chunk; no ring iteration popped it.
             if (seen_active_iter) {
                 sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt_qk);
-                if constexpr (k_expand) {
-                    sdpa_cb_pop_front_out_of_line(cb_wuk, wuk_tiles);
-                }
             }
             ASSERT(seg_state_valid);
             constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;

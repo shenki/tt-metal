@@ -497,7 +497,7 @@ def test_mistral_small4_mla(
 
 
 # ---------------------------------------------------------------------------------------------------
-# Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
+# Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+SDPA -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
 # ---------------------------------------------------------------------------------------------------
 # reference='trace' takes its trace dirs from variant.mla_trace_defaults. MLA_CHUNKED_TRACE_PATH
@@ -569,7 +569,7 @@ def _poison_tp_latent_slot(mesh_device, tt_ccl, *, seq_len, kvpe_dim, sp_axis, t
     """Overwrite the TP latent buffers (one, or two with prefetch) with seeded finite garbage, so a gather that skips a
     live block (or a captured gather that does nothing) shows up as a mismatch instead of reading earlier, still-correct
     data. Buffer 0 must already exist under this key, i.e. be the one the forward uses."""
-    keys = [("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, ttnn.bfloat8_b, index) for index in (0, 1)]
+    keys = [("tp_latent_slot", seq_len, kvpe_dim, sp_axis, tp_axis, index) for index in (0, 1)]
     assert keys[0] in tt_ccl.mla_chunked_kv_buffers, f"no TP latent slot under {keys[0]}: the poison would miss it"
     shard_dims = [None, None]
     shard_dims[sp_axis] = 2
@@ -586,6 +586,48 @@ def _poison_tp_latent_slot(mesh_device, tt_ccl, *, seq_len, kvpe_dim, sp_axis, t
             ),
             tt_ccl.mla_chunked_kv_buffers[key],
         )
+
+
+def _meta_scalar(mesh_device, value):
+    """A replicated 1-element uint32 [1, 1, 1, 1] DRAM tensor: one field of the chunk metadata."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _new_chunk_metadata(mesh_device, chunk, scale_buf):
+    """Persistent chunk metadata (slot 0, start 0, end chunk) that write_chunk_metadata rewrites in place per step."""
+    return ChunkMetadata(
+        _meta_scalar(mesh_device, 0), _meta_scalar(mesh_device, 0), _meta_scalar(mesh_device, chunk), scale_buf
+    )
+
+
+def _new_layered_kv_cache(config, mesh_device, seq_len, num_layers, num_users, sp_axis, tp_axis, tp_sharded=True):
+    """A num_users x num_layers BFP8 KVPE cache over the whole mesh, TP-deduped when tp_sharded."""
+    return init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=tuple(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+        tp_axis=tp_axis if tp_sharded else None,
+    )
+
+
+def _natural_cache(mesh_device, cache, tp_sharded, chunk, seq_len):
+    """Every (user, layer) slot of the cache, un-striped to natural token order."""
+    flat, stripes = gather_cache_natural(cache.storage, mesh_device, tp_sharded)
+    nat = torch.empty_like(flat)
+    nat[:, blockcyclic_positions(stripes, chunk, seq_len)] = flat
+    return nat
 
 
 def _run_chunked_prefill(
@@ -682,8 +724,8 @@ def _run_chunked_prefill(
             max_real_end = max(max_real_end, ka)
     if tight_cache:
         # Cache sized to the REAL tokens, not the padded window, so a late iteration's window runs past
-        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and ring_mla
-        # caps logical_n at the cache.
+        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and the SDPA's
+        # logical_n is capped at the cache.
         write_end = -(-max_real_end // tile) * tile
         max_window = max(chunk_size_global * 2, write_end)
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
@@ -776,7 +818,7 @@ def _run_chunked_prefill(
         **(mla_kwargs or {}),
     )
     # The TP latent prefetch's sub-device manager must not outlive the mesh, whatever the outcome.
-    request.addfinalizer(mla_tt.release_sparse_mla_overlap_manager)
+    request.addfinalizer(mla_tt.release_overlap_managers)
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
         # tail_slack: an overrunning iteration still ropes its whole padded slab, so the table needs one
@@ -798,9 +840,7 @@ def _run_chunked_prefill(
         num_users=num_users,
         tp_axis=tp_axis if tp_shard_kv else None,
     )
-    assert (
-        num_cache_layers == 1 or trace_time or profile
-    ), "num_cache_layers > 1 is a trace_time / profile (steady-state layer) mode"
+    assert num_cache_layers == 1 or trace_time, "num_cache_layers > 1 is a trace_time (steady-state layer) mode"
 
     hidden_shard_dims = [None, None]
     hidden_shard_dims[tp_axis] = -1
@@ -889,23 +929,13 @@ def _run_chunked_prefill(
                 ),
             )
             # Trace-safe metadata variant: build the runner's canonical metadata and hand it to forward
-            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/ring_mla), which read
+            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/SDPA), which read
             # their per-chunk scalars on-device. The contract is a 3-tuple of separate 1-element uint32
             # tensors indexed as metadata[0]=slot_id, [1]=actual_start, [2]=actual_end -- NOT one packed
             # tensor. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
             kv_pad_metadata = None
             if use_metadata_tensor:
-                scalars = tuple(
-                    ttnn.from_torch(
-                        torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
-                        device=mesh_device,
-                        dtype=ttnn.uint32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                    )
-                    for val in (u, kv_actual, valid_end)
-                )
+                scalars = tuple(_meta_scalar(mesh_device, val) for val in (u, kv_actual, valid_end))
                 # 4th field is Mistral's query-scale buffer (None elsewhere), refreshed here by
                 # write_chunk_metadata so the scalars and the scale advance together.
                 kv_pad_metadata = ChunkMetadata(*scalars, llama4_scale_buf)
@@ -952,12 +982,8 @@ def _run_chunked_prefill(
                         seed=1000 * u + i,
                     )
                 if profile:
-                    # With several cache layers, profile layer 1 after an eager layer 0 (see trace_time).
-                    measured_layer = 1 if num_cache_layers > 1 else 0
                     with mla_tt.tt_ccl.tp_latent_prefetch_chain():
-                        if measured_layer:
-                            ttnn.deallocate(_forward(0))
-                        tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, lambda: _forward(measured_layer))
+                        tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
                     profiled_ns += fwd_ns
                     logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
                 elif trace_time:
@@ -1623,13 +1649,10 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
     )
 
 
-# Measured 2026-10-17 (realtime profiler), forward with ring_mla -> V unrolled ahead of ring_joint SDPA (the Kimi
-# default, mla_config.MLA_ATTENTION_CONFIG):
-#   kimi_k3   9.38 -> 7.21 ms (-23%): ring SDPA 7.99 -> 5.46 ms (q160, 96 cores), + V expansion (minimal_matmul) 0.40 ms
-#   kimi_k2_7 6.39 -> 5.06 ms (-21%): ring SDPA 5.47 -> 3.89 ms (q320 k256 split three ways, 96 cores), + V expansion
-#             0.28 ms
-# At a 512k prefix kimi_k2_7 is 54.82 -> 41.38 ms (-25%), kimi_k3 80.34 -> 58.92 ms (-27%). The V expansion covers every
-# local cache row, so at sp=8 it has a quarter of these rows.
+# Measured 2026-10-17 (realtime profiler), V unrolled ahead of ring_joint SDPA:
+#   kimi_k3   7.21 ms: ring SDPA 5.46 ms (q160, 96 cores) + V expansion (minimal_matmul) 0.40 ms
+#   kimi_k2_7 5.06 ms: ring SDPA 3.89 ms (q320 k256 split three ways, 96 cores) + V expansion 0.28 ms
+# The V expansion covers every local cache row, so at sp=8 it has a quarter of these rows.
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4")],
@@ -1682,7 +1705,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
     timed with the realtime (lightweight) profiler instead of Tracy.
 
-    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
+    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's target: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
     topology = per_axis_topology(device_params["fabric_config"])
@@ -1728,7 +1751,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
 @pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
-    request, mesh_device, device_params, reference, kwargs, variant, use_metadata_tensor, expanded_k, monkeypatch
+    request, mesh_device, device_params, reference, kwargs, variant, use_metadata_tensor, expanded_k
 ):
     """The TP-sharded cache is read back through a TP latent gather into the TP-replicated layout, and everything
     downstream is unchanged, so the output must equal the TP-replicated (sp_only) run bit for bit, on the same inputs,
@@ -1748,8 +1771,8 @@ def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
             tp_shard_kv=tp_shard_kv,
             return_outputs=True,
             poison_tp_latent_slot=True,
-            **kwargs,
             mla_kwargs=dict(expanded_k=expanded_k),
+            **kwargs,
         )
     assert len(outs[False]) == len(outs[True]), "the two layouts returned different user counts"
     for u, (sp_only, tp_sharded) in enumerate(zip(outs[False], outs[True])):
@@ -1766,7 +1789,7 @@ def test_mla_chunked_prefill_tp_sharded_matches_sp_only(
 # gather is fixed latency there, which running it concurrently does not hide), K2.7 256k +0.31/+0.11%. Serial: +0.19/
 # +0.62%, +0.92/+1.08%, +1.52/+1.39/+2.56/+1.78/+1.32% (mean +1.71%) and +1.73/+1.55%. Each prefetch gate is the worst
 # sample plus about 1 pp of run-to-run noise.
-# The serial gather (tp_latent_prefetch=False) keeps Phase 2's gates.
+# The serial gather (tp_latent_prefetch=False) keeps Phase 2's gates, the last column.
 _TP_SHARDED_PERF_POINTS = [
     pytest.param("kimi_k3", 50 * 1024, 0.012, 0.025, id="k3-50k"),
     pytest.param("kimi_k3", 512 * 1024, 0.011, 0.022, id="k3-512k"),
@@ -1805,7 +1828,6 @@ def test_mla_chunked_tp_sharded_traced_perf(
     max_overhead,
     max_serial_overhead,
     use_metadata_tensor,
-    monkeypatch,
 ):
     """Traced-replay time of one 5k-chunk MLA forward at a long prefix, TP-sharded cache vs TP-replicated (sp_only),
     on the same build and machine. The timed forward is a steady-state layer (layer 1 of 3): with the TP latent
@@ -1931,9 +1953,7 @@ _X4_STEPS = [(0, 0), (1, 0), (0, 5120), (0, 10240), (1, 2560), (0, 15360), (1, 7
 @pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
 @pytest.mark.parametrize("chunk", [5120, 2048], ids=["c5k", "c2k"])
 @pytest.mark.timeout(0)
-def test_mla_tp_sharded_trace_replay_multi_layer(
-    request, mesh_device, device_params, variant, expanded_k, chunk, monkeypatch
-):
+def test_mla_tp_sharded_trace_replay_multi_layer(request, mesh_device, device_params, variant, expanded_k, chunk):
     # Expanded K (docs/expanded_k/PLAN.md E4): every layer passes its own wkv_b1 as the in-kernel K weight.
     config, weights = request.getfixturevalue("random_weights")
     sp_axis, tp_axis = 0, 1
@@ -1976,19 +1996,6 @@ def test_mla_tp_sharded_trace_replay_multi_layer(
     rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=chunk)
     scale_buf = rope_setup.make_llama4_scale_buffer(chunk)
 
-    def new_cache(tp_sharded=True):
-        return init_mla_kv_cache(
-            cache_format=MlaKvCacheFormat.BFP8_TILE,
-            hf_config=config,
-            mesh_device=mesh_device,
-            seq_len=seq_len_cache,
-            mesh_shape=mesh_shape,
-            sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_layers,
-            num_users=num_users,
-            tp_axis=tp_axis if tp_sharded else None,
-        )
-
     hidden_dims = [None, None]
     hidden_dims[tp_axis] = -1
     hidden_dims[sp_axis] = -2
@@ -2009,17 +2016,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(
             mesh_mapper=mapper,
         )
 
-    def meta_scalar(value):
-        return ttnn.from_torch(
-            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
-    metadata = ChunkMetadata(meta_scalar(0), meta_scalar(0), meta_scalar(chunk), scale_buf)
+    metadata = _new_chunk_metadata(mesh_device, chunk, scale_buf)
 
     def set_step(user, start):
         write_chunk_metadata(
@@ -2061,7 +2058,7 @@ def test_mla_tp_sharded_trace_replay_multi_layer(
 
     # Eager reference on a fresh cache.
     eager = []
-    cache_eager = new_cache()
+    cache_eager = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
     for step, (user, start) in enumerate(x4_steps):
         set_step(user, start)
         poison(step)
@@ -2069,10 +2066,12 @@ def test_mla_tp_sharded_trace_replay_multi_layer(
         eager.append([ttnn.to_torch(o, mesh_composer=composer) for o in outs])
 
     # Traced: one capture, replayed once per step with the inputs and metadata rewritten in place.
-    cache_traced = new_cache()
+    cache_traced = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
     # Allocated before the capture: anything persistent allocated while the trace is alive could land on the trace's
     # intermediate buffers and be overwritten by a later replay.
-    cache_sp = new_cache(tp_sharded=False)
+    cache_sp = _new_layered_kv_cache(
+        config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=False
+    )
     tt_hidden = [to_device(host_hidden(0, layer)) for layer in range(num_layers)]
     set_step(*x4_steps[0])
     # Compile the sp_only programs now too (writing step 0's rows of the replicated cache, as its pass will again), so
@@ -2168,18 +2167,15 @@ def test_mla_tp_sharded_trace_replay_multi_layer(
         controller.release()
         for mla_layer in layers:
             mla_layer.set_trace_controller(None)
-        layers[0].release_sparse_mla_overlap_manager()
+        layers[0].release_overlap_managers()
 
     # The caches themselves, un-striped to natural order: the traced, TP-sharded eager and TP-replicated eager runs must
     # have written identical bytes into every (user, layer) slot, and every slot must hold data. Equal outputs alone
     # would miss a cache write that ignores the layer, since every layout would read the same wrong slot.
-    def natural(cache, tp_sharded):
-        flat, stripes = gather_cache_natural(cache.storage, mesh_device, tp_sharded)
-        nat = torch.empty_like(flat)
-        nat[:, blockcyclic_positions(stripes, chunk, seq_len_cache)] = flat
-        return nat
-
-    nat_eager, nat_traced, nat_sp = natural(cache_eager, True), natural(cache_traced, True), natural(cache_sp, False)
+    nat_eager, nat_traced, nat_sp = (
+        _natural_cache(mesh_device, cache, tp_sharded, chunk, seq_len_cache)
+        for cache, tp_sharded in ((cache_eager, True), (cache_traced, True), (cache_sp, False))
+    )
     assert torch.equal(nat_traced, nat_eager), "traced and eager TP-sharded caches differ"
     assert torch.equal(nat_sp, nat_eager), "TP-replicated and TP-sharded caches differ"
     # Every slot is written, and rows past user 1's extent (12800 at 5k chunks) are written only in user 0's slots
@@ -2254,36 +2250,13 @@ def test_mla_tp_latent_prefetch_matches_sp_only(
     rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len_cache, chunk_size_global=chunk)
     scale_buf = rope_setup.make_llama4_scale_buffer(chunk)
 
-    def new_cache(tp_sharded):
-        return init_mla_kv_cache(
-            cache_format=MlaKvCacheFormat.BFP8_TILE,
-            hf_config=config,
-            mesh_device=mesh_device,
-            seq_len=seq_len_cache,
-            mesh_shape=mesh_shape,
-            sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_layers,
-            num_users=num_users,
-            tp_axis=tp_axis if tp_sharded else None,
-        )
-
     hidden_dims = [None, None]
     hidden_dims[tp_axis] = -1
     hidden_dims[sp_axis] = -2
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_dims)
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=hidden_dims, mesh_shape=mesh_device.shape)
 
-    def meta_scalar(value):
-        return ttnn.from_torch(
-            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
-    metadata = ChunkMetadata(meta_scalar(0), meta_scalar(0), meta_scalar(chunk), scale_buf)
+    metadata = _new_chunk_metadata(mesh_device, chunk, scale_buf)
 
     consumed = []
     write_chunk = ttMLA._write_tp_latent_chunk
@@ -2354,7 +2327,9 @@ def test_mla_tp_latent_prefetch_matches_sp_only(
     caches = {}
     for name, tp_sharded, prefetch in [("sp_only", False, False), ("serial", True, False), ("prefetch", True, True)]:
         set_layout(tp_sharded, prefetch)
-        caches[name] = new_cache(tp_sharded)
+        caches[name] = _new_layered_kv_cache(
+            config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded
+        )
         consumed.clear()
         passes[name] = [
             run(caches[name], step, poison_seed=step if tp_sharded else None) for step in range(len(_PREFETCH_STEPS))
@@ -2371,15 +2346,10 @@ def test_mla_tp_latent_prefetch_matches_sp_only(
                     "elements differ from sp_only"
                 )
 
-    def natural(cache, tp_sharded):
-        flat, stripes = gather_cache_natural(cache.storage, mesh_device, tp_sharded)
-        nat = torch.empty_like(flat)
-        nat[:, blockcyclic_positions(stripes, chunk, seq_len_cache)] = flat
-        return nat
-
-    nat_sp = natural(caches["sp_only"], False)
+    nat_sp = _natural_cache(mesh_device, caches["sp_only"], False, chunk, seq_len_cache)
     for name in ("serial", "prefetch"):
-        assert torch.equal(natural(caches[name], True), nat_sp), f"{name} cache differs from sp_only"
+        nat = _natural_cache(mesh_device, caches[name], True, chunk, seq_len_cache)
+        assert torch.equal(nat, nat_sp), f"{name} cache differs from sp_only"
 
     # A prefetch never outlives its chain or a layout change, so these must gather serially and match the serial path
     # bit for bit (the caches are equal, and re-running a step rewrites its rows with the same data):
@@ -2619,10 +2589,10 @@ def _check_expanded_k_vs_absorbed(
             return_outputs=True,
             return_pccs=True,
             valid_rows=valid_rows if expanded else None,
-            **kwargs,
             mla_kwargs=dict(expanded_k=expanded),
+            **kwargs,
         )
-        # The mode (and a forced schedule) really took effect: a declined gate would compare absorbed with itself.
+        # The mode (and the expected schedule) really took effect: a declined gate would compare absorbed with itself.
         assert sdpa_calls[expanded] and all(c["expanded"] == expanded for c in sdpa_calls[expanded]), "mode not applied"
         if expanded and q_chunk is not None:
             assert all(c["q_chunk"] == q_chunk for c in sdpa_calls[True]), f"schedule not q{q_chunk}"
@@ -2725,6 +2695,38 @@ def test_mla_attention_selection(request, mesh_device, device_params, variant, e
     assert recorder.calls and all(c["expanded"] == (expanded_k is not False) for c in recorder.calls)
 
 
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["k2_7"])
+@pytest.mark.timeout(0)
+def test_mla_attention_overrides(request, mesh_device, device_params, variant, monkeypatch, expect_error):
+    """unrolled_v=False puts Kimi back on ring_mla; expanded_k=True at a shape without a measured head-pair schedule
+    (2.5k chunks: 320 rows per chip) is refused, where the model default would keep K absorbed."""
+    ring_mla_calls = []
+    ring_mla = ttnn.transformer.ring_mla
+
+    def counting_ring_mla(*args, **kwargs):
+        ring_mla_calls.append(1)
+        return ring_mla(*args, **kwargs)
+
+    monkeypatch.setattr(ttnn.transformer, "ring_mla", counting_ring_mla)
+    recorder = _SdpaRecorder(monkeypatch)
+    run = functools.partial(
+        _run_chunked_prefill,
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+    )
+    run(iters_isl=[5120], mla_kwargs=dict(unrolled_v=False))
+    assert ring_mla_calls and not recorder.calls, "unrolled_v=False did not run ring_mla"
+    with expect_error(ValueError, "expanded K does not apply"):
+        run(chunk_size_global=2560, iters_isl=[2560], mla_kwargs=dict(expanded_k=True))
+
+
 # Unrolled-V accuracy floor (docs/expanded_k/STATUS.md): the V expansion accumulates in fp32. Accumulated in
 # bf16 at HiFi2 it scored K3 0.99322 and K2.7 0.99637 here (main's ring_mla 0.99805 / 0.99738; fp32 0.99828 / 0.99751),
 # and the harness's own 0.98 checks would not notice.
@@ -2739,7 +2741,7 @@ _UNROLLED_V_MIN_PCC = {"kimi_k3": 0.9978, "kimi_k2_7": 0.9968}
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
 @pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
 @pytest.mark.timeout(0)
-def test_mla_unrolled_v_accuracy_floor(request, mesh_device, device_params, variant, expanded_k, monkeypatch):
+def test_mla_unrolled_v_accuracy_floor(request, mesh_device, device_params, variant, expanded_k):
     _, pccs = _run_chunked_prefill(
         request,
         mesh_device,
@@ -2757,16 +2759,6 @@ def test_mla_unrolled_v_accuracy_floor(request, mesh_device, device_params, vari
     assert pccs[0] >= floor, f"output PCC {pccs[0]} < {floor}"
 
 
-# Schedules outside the measured table (forced here): no K split with one Q chunk per core (q160/k256, every core
-# expands its whole head), several Q chunks per core (q64/k256: 160 units on 110 cores at K2.7, 240 at K3, where W_UK is
-# pushed and popped per Q chunk through a double-buffered cb_wuk), and head pairs without a K split (q320/k256, 1 split).
-_EXPANDED_K_FORCED_SCHEDULES = {
-    "q160_k256": (160, 256, 1),
-    "q64_k256": (64, 256, 1),
-    "q320_k256_nosplit": (320, 256, 1),
-}
-
-
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4")],
@@ -2778,14 +2770,16 @@ _EXPANDED_K_FORCED_SCHEDULES = {
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
-@pytest.mark.parametrize("schedule", list(_EXPANDED_K_FORCED_SCHEDULES))
 @pytest.mark.timeout(0)
-def test_mla_expanded_k_schedules(
-    request, mesh_device, device_params, kwargs, variant, use_metadata_tensor, schedule, monkeypatch
+def test_mla_expanded_k_pairs_without_k_split(
+    request, mesh_device, device_params, kwargs, variant, use_metadata_tensor, monkeypatch
 ):
-    """test_mla_expanded_k_matches_absorbed's checks on schedules the table does not pick (sp_only)."""
-    chunks = _EXPANDED_K_FORCED_SCHEDULES[schedule]
-    monkeypatch.setattr(ttMLA, "_EXPANDED_K_SDPA_CHUNKS", {key: chunks for key in ttMLA._EXPANDED_K_SDPA_CHUNKS})
+    """test_mla_expanded_k_matches_absorbed's checks (sp_only) on a pair schedule the table does not pick: q320 / k256
+    with no K split, so the pairs and their exchange run without bands on rotated chunked metadata."""
+    chunks = (320, 256, 1)
+    # Only the 640-row (5k chunk) entries: q320 gives pairs there, not at 256 rows.
+    table = {key: chunks if key[2] == 640 else value for key, value in ttMLA._EXPANDED_K_SDPA_CHUNKS.items()}
+    monkeypatch.setattr(ttMLA, "_EXPANDED_K_SDPA_CHUNKS", table)
     _check_expanded_k_vs_absorbed(
         request, mesh_device, device_params, kwargs, use_metadata_tensor, False, monkeypatch, q_chunk=chunks[0]
     )
@@ -2797,19 +2791,18 @@ def test_mla_expanded_k_schedules(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "kwargs,schedule",
+    "kwargs",
     [
-        pytest.param(dict(_CHUNKED_SCENARIOS)["rot-multislab"], None, id="c5k-pairs"),
-        pytest.param(dict(_CHUNKED_SCENARIOS)["rot-multislab"], "q160_k256", id="c5k-q160"),
-        pytest.param(dict(_EXPANDED_K_2K_SCENARIOS)["c2k-prefix"], None, id="c2k-pairs"),
+        pytest.param(dict(_CHUNKED_SCENARIOS)["rot-multislab"], id="c5k-pairs"),
+        pytest.param(dict(_EXPANDED_K_2K_SCENARIOS)["c2k-prefix"], id="c2k-pairs"),
     ],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
 @pytest.mark.timeout(0)
-def test_mla_expanded_k_lofi(request, mesh_device, device_params, kwargs, schedule, variant, monkeypatch):
+def test_mla_expanded_k_lofi(request, mesh_device, device_params, kwargs, variant, monkeypatch):
     """The SDPA matmul fidelity override (sdpa_matmul_fidelity=LoFi) also sets the K expansion's fidelity: the expanded
     vs absorbed checks of test_mla_expanded_k_matches_absorbed, with LoFi QK / PV (both modes) and LoFi expansion, on
-    head pairs (4 x 2 expansion blocks) and on a forced one-core-per-Q-chunk schedule (2 x 4 blocks)."""
+    the table's head-pair schedules (4 x 2 expansion blocks) at 5k and 2k chunks."""
     init = ttMLA.__init__
 
     def init_lofi(self, *args, **init_kwargs):
@@ -2817,19 +2810,8 @@ def test_mla_expanded_k_lofi(request, mesh_device, device_params, kwargs, schedu
         self.sdpa_matmul_fidelity = ttnn.MathFidelity.LoFi
 
     monkeypatch.setattr(ttMLA, "__init__", init_lofi)
-    chunks = _EXPANDED_K_FORCED_SCHEDULES[schedule] if schedule else None
-    if chunks:
-        monkeypatch.setattr(ttMLA, "_EXPANDED_K_SDPA_CHUNKS", {key: chunks for key in ttMLA._EXPANDED_K_SDPA_CHUNKS})
     _check_expanded_k_vs_absorbed(
-        request,
-        mesh_device,
-        device_params,
-        kwargs,
-        False,
-        False,
-        monkeypatch,
-        q_chunk=chunks[0] if chunks else None,
-        fidelity=ttnn.MathFidelity.LoFi,
+        request, mesh_device, device_params, kwargs, False, False, monkeypatch, fidelity=ttnn.MathFidelity.LoFi
     )
 
 
@@ -2840,7 +2822,7 @@ def test_mla_expanded_k_lofi(request, mesh_device, device_params, kwargs, schedu
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7", "kimi_k3"], indirect=True, ids=["k2_7", "k3"])
 @pytest.mark.timeout(0)
-def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_params, variant, monkeypatch):
+def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_params, variant):
     """Expanded K's W_UK is a runtime-patched buffer. Each layer's kv_b is rotated by one head against the previous
     layer's, so a program still reading another layer's W_UK would attend with a neighbouring head's weights:
     expanded vs absorbed (whose wkv_b1 matmul is a separate op) must agree per layer and step, on the TP-sharded cache
@@ -2894,17 +2876,7 @@ def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_para
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_dims)
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=hidden_dims, mesh_shape=mesh_device.shape)
 
-    def meta_scalar(value):
-        return ttnn.from_torch(
-            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
-    metadata = ChunkMetadata(meta_scalar(0), meta_scalar(0), meta_scalar(chunk), scale_buf)
+    metadata = _new_chunk_metadata(mesh_device, chunk, scale_buf)
 
     def forward_layer(cache, step, layer, cache_layer_idx=None):
         user = _PREFETCH_STEPS[step][0]
@@ -2942,24 +2914,11 @@ def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_para
             sp_axis=sp_axis,
         )
 
-    def new_cache(tp_sharded):
-        return init_mla_kv_cache(
-            cache_format=MlaKvCacheFormat.BFP8_TILE,
-            hf_config=config,
-            mesh_device=mesh_device,
-            seq_len=seq_len_cache,
-            mesh_shape=mesh_shape,
-            sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_layers,
-            num_users=num_users,
-            tp_axis=tp_axis if tp_sharded else None,
-        )
-
     outputs = {}
     for expanded in (False, True):
         for mla_layer in layers:
             mla_layer._expanded_k = expanded
-        cache = new_cache(tp_sharded=True)
+        cache = _new_layered_kv_cache(config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis)
         outputs[expanded] = []
         for step in range(4):
             set_step(step)
@@ -2978,7 +2937,9 @@ def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_para
     for mla_layer in layers:
         mla_layer.set_tp_shard_kv(False)
         mla_layer._expanded_k = True
-    cache = new_cache(tp_sharded=False)
+    cache = _new_layered_kv_cache(
+        config, mesh_device, seq_len_cache, num_layers, num_users, sp_axis, tp_axis, tp_sharded=False
+    )
     set_step(0)
     # Start cold, so layer 0 must compile (a reused mesh may already hold these programs).
     mesh_device.disable_and_clear_program_cache()
@@ -2999,6 +2960,30 @@ def test_mla_expanded_k_distinct_layer_weights(request, mesh_device, device_para
             pcc >= _EXPANDED_K_MIN_PCC_VS_ABSORBED
         ), f"layer {layer} on a shared program: expanded vs absorbed PCC {pcc}"
     ttnn.deallocate(cache.storage)
+
+
+def _sp_gathered(per_device, sp, tp, t, take):
+    """take() of TP group t's tensor on every SP chip, concatenated in SP order along dim -2 (natural token order at
+    position 0)."""
+    return torch.cat([take(per_device[s * tp + t]) for s in range(sp)], dim=-2)
+
+
+def _per_head_attention_reference(call, sp, tp, t, rows, expanded_k, keep):
+    """Yield (head, fp32 attention output) for TP group t from a recorded SDPA call's per-device inputs, gathered over
+    the SP chips' first `rows` rows. K is the latent (absorbed) or K_h = [c_kv @ W_UK_h^T | k_pe] (expanded); `keep` is
+    the [query, key] mask of scores kept, so the caller owns causality and pad rows."""
+    k_latent = _sp_gathered(call["k"], sp, tp, t, lambda x: x[0, 0, :rows])  # [N, 576], this TP device's copy
+    q = _sp_gathered(call["q"], sp, tp, t, lambda x: x[0, :, :rows])  # [heads, N, D]
+    v = _sp_gathered(call["v"], sp, tp, t, lambda x: x[0, :, :rows])  # [heads, N, 128]
+    for h in range(q.shape[0]):
+        if expanded_k:
+            w_uk = call["w"][t][0, h]  # [128, latent]
+            latent = w_uk.shape[1]
+            k = torch.cat([k_latent[:, :latent] @ w_uk.T, k_latent[:, latent:]], dim=-1)
+        else:
+            k = k_latent
+        scores = ((q[h] @ k.T) * call["scale"]).masked_fill(~keep, float("-inf"))
+        yield h, torch.softmax(scores, dim=-1) @ v[h]
 
 
 @pytest.mark.parametrize(
@@ -3039,27 +3024,13 @@ def test_ring_joint_expanded_k_per_head_vs_reference(
     assert call["expanded"] == expanded_k
     sp, tp = tuple(mesh_device.shape)
     rows = 5120 // sp
-    latent = 512
-
-    def gathered(per_device, t, take):
-        return torch.cat([take(per_device[s * tp + t]) for s in range(sp)], dim=-2)
 
     keep = torch.ones(5120, 5120, dtype=torch.bool).tril()
     keep[:, valid:] = False
     worst, worst_err = 1.0, 0.0
     for t in range(tp):
-        k_latent = gathered(call["k"], t, lambda x: x[0, 0, :rows])  # [5120, 576], this TP device's copy
-        q = gathered(call["q"], t, lambda x: x[0, :, :rows])  # [heads, 5120, D]
-        v = gathered(call["v"], t, lambda x: x[0, :, :rows])  # [heads, 5120, 128]
-        out = gathered(call["out"], t, lambda x: x[0, :, :rows])
-        for h in range(q.shape[0]):
-            if expanded_k:
-                w_uk = call["w"][t][0, h]  # [128, 512]
-                k = torch.cat([k_latent[:, :latent] @ w_uk.T, k_latent[:, latent:]], dim=-1)
-            else:
-                k = k_latent
-            scores = ((q[h] @ k.T) * call["scale"]).masked_fill(~keep, float("-inf"))
-            ref = torch.softmax(scores, dim=-1) @ v[h]
+        out = _sp_gathered(call["out"], sp, tp, t, lambda x: x[0, :, :rows])
+        for h, ref in _per_head_attention_reference(call, sp, tp, t, rows, expanded_k, keep):
             assert torch.isfinite(ref[:valid]).all(), f"TP group {t} head {h}: non-finite reference"
             assert torch.isfinite(out[h, :valid]).all(), f"TP group {t} head {h}: non-finite SDPA output"
             for s in range(sp):
@@ -3085,13 +3056,14 @@ def test_ring_joint_expanded_k_per_head_vs_reference(
 @pytest.mark.parametrize("expanded_k", [False, True], ids=["absorbed", "expanded_k"])
 @pytest.mark.timeout(0)
 def test_ring_joint_expanded_k_causal_vs_reference(
-    request, mesh_device, device_params, variant, expanded_k, monkeypatch
+    request, mesh_device, device_params, variant, expanded_k, monkeypatch, expect_error
 ):
     """The non-chunked causal ring_joint SDPA (Q and K one chunk each), per (query chip, head) against fp32 attention.
     Unlike chunked prefill it skips K chunks per Q chunk (fully above the diagonal), so with expanded K in head pairs
     (q320: two Q chunks per head; no K split outside chunked prefill) one core of a pair skips K chunks its peer
     needs: it must still expand and exchange them and then drain the assembled K^T. The inputs are recorded from a
-    chunk-0 MLA forward (natural token order) and replayed on the op directly, K and V cut to the chunk."""
+    chunk-0 MLA forward (natural token order) and replayed on the op directly, K and V cut to the chunk. Expanded, the
+    replay also checks that the op refuses schedules without head pairs."""
     sp, tp = tuple(mesh_device.shape)
     rows = 5120 // sp
     # Pin the schedule this test exists for: q320 gives two Q chunks per head (a pair), one Q chunk per core.
@@ -3110,7 +3082,7 @@ def test_ring_joint_expanded_k_causal_vs_reference(
     assert call["expanded"] == expanded_k
     dev, kw = call["device"], call["device"]["kwargs"]
     if expanded_k:
-        # Pair prerequisites (the factory's head groups): two Q chunks per head, at most one Q chunk per core.
+        # Pair prerequisites (the factory's head pairs): two Q chunks per head, at most one Q chunk per core.
         grid = mesh_device.compute_with_storage_grid_size()
         units = dev["q"].shape[1] * (rows // call["q_chunk"])
         assert call["q_chunk"] == 320 and rows // call["q_chunk"] == 2, f"q chunk {call['q_chunk']}: no head pairs"
@@ -3118,50 +3090,43 @@ def test_ring_joint_expanded_k_causal_vs_reference(
     heads = dev["q"].shape[1] * tp
     tt_ccl = get_tt_ccl(mesh_device)
     sdpa = ttnn.transformer.ring_joint_scaled_dot_product_attention._recorded_op
-    out, _, _ = sdpa(
-        dev["q"],
-        dev["k"],
-        dev["v"],
-        persistent_output_buffer_k=tt_ccl.get_mla_chunked_kv_buffer(
-            cache_batch=1, seq_len=5120, kvpe_dim=dev["k"].shape[3]
-        ),
-        persistent_output_buffer_v=tt_ccl.get_mla_chunked_v_buffer(
-            seq_len=5120, num_heads=heads, v_head_dim=dev["v"].shape[3], tp_axis=1
-        ),
-        logical_n=5120,
-        program_config=kw["program_config"],
-        compute_kernel_config=kw["compute_kernel_config"],
-        dim=2,
-        multi_device_global_semaphore=kw["multi_device_global_semaphore"],
-        num_links=kw["num_links"],
-        cluster_axis=kw["cluster_axis"],
-        mesh_device=mesh_device,
-        topology=kw["topology"],
-        ccl_core_grid_offset=kw["ccl_core_grid_offset"],
-        use_column_major_ccl=True,
-        is_causal=True,
-        scale=call["scale"],
-        is_balanced=False,
-        **({"k_expand_weight": kw["k_expand_weight"]} if expanded_k else {}),
-    )
-    out = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(out)]
 
-    def gathered(per_device, t, take):
-        return torch.cat([take(per_device[s * tp + t]) for s in range(sp)], dim=-2)
+    def run(program_config):
+        return sdpa(
+            dev["q"],
+            dev["k"],
+            dev["v"],
+            persistent_output_buffer_k=tt_ccl.get_mla_chunked_kv_buffer(
+                cache_batch=1, seq_len=5120, kvpe_dim=dev["k"].shape[3]
+            ),
+            persistent_output_buffer_v=tt_ccl.get_mla_chunked_v_buffer(
+                seq_len=5120, num_heads=heads, v_head_dim=dev["v"].shape[3], tp_axis=1
+            ),
+            logical_n=5120,
+            program_config=program_config,
+            compute_kernel_config=kw["compute_kernel_config"],
+            dim=2,
+            multi_device_global_semaphore=kw["multi_device_global_semaphore"],
+            num_links=kw["num_links"],
+            cluster_axis=kw["cluster_axis"],
+            mesh_device=mesh_device,
+            topology=kw["topology"],
+            ccl_core_grid_offset=kw["ccl_core_grid_offset"],
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=call["scale"],
+            is_balanced=False,
+            **({"k_expand_weight": kw["k_expand_weight"]} if expanded_k else {}),
+        )
+
+    out, _, _ = run(kw["program_config"])
+    out = [ttnn.to_torch(d).float() for d in ttnn.get_device_tensors(out)]
 
     keep = torch.ones(5120, 5120, dtype=torch.bool).tril()
     worst = 1.0
     for t in range(tp):
-        k_latent = gathered(call["k"], t, lambda x: x[0, 0, :rows])
-        q = gathered(call["q"], t, lambda x: x[0, :, :rows])
-        v = gathered(call["v"], t, lambda x: x[0, :, :rows])
-        got = gathered(out, t, lambda x: x[0, :, :rows])
-        for h in range(q.shape[0]):
-            if expanded_k:
-                k = torch.cat([k_latent[:, :512] @ call["w"][t][0, h].T, k_latent[:, 512:]], dim=-1)
-            else:
-                k = k_latent
-            ref = torch.softmax(((q[h] @ k.T) * call["scale"]).masked_fill(~keep, float("-inf")), dim=-1) @ v[h]
+        got = _sp_gathered(out, sp, tp, t, lambda x: x[0, :, :rows])
+        for h, ref in _per_head_attention_reference(call, sp, tp, t, rows, expanded_k, keep):
             assert torch.isfinite(got[h]).all(), f"TP group {t} head {h}: non-finite SDPA output"
             for s in range(sp):
                 _, pcc = comp_pcc(ref[s * rows : (s + 1) * rows], got[h, s * rows : (s + 1) * rows])
@@ -3170,3 +3135,23 @@ def test_ring_joint_expanded_k_causal_vs_reference(
     logger.success(
         f"✓ non-chunked causal SDPA per (query chip, head) vs fp32 ({'expanded' if expanded_k else 'absorbed'} K): min PCC {worst:.6f}"
     )
+    if expanded_k:
+        # Expanded K runs on head pairs only: the op refuses, before launching anything, a schedule without them (q160:
+        # four Q chunks per head; a 4x4 grid: more than one Q chunk per core) and segmented accumulation.
+        base = kw["program_config"]
+        small = ttnn.CoreCoord(4, 4)
+        for grid_size, q_chunk_size, segmented, error in (
+            (base.compute_with_storage_grid_size, 160, False, "needs head pairs"),
+            (small, 320, False, "needs head pairs"),
+            (base.compute_with_storage_grid_size, 320, True, "segmented_accumulation"),
+        ):
+            config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=base.k_chunk_size,
+                exp_approx_mode=False,
+                matmul_math_fidelity=base.matmul_math_fidelity,
+                segmented_accumulation=segmented,
+            )
+            with expect_error(RuntimeError, error):
+                run(config)

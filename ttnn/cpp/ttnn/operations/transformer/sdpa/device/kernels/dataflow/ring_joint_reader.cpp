@@ -243,17 +243,23 @@ void kernel_main() {
     constexpr uint32_t NHK = get_compile_time_arg_val(2);
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
-    // Expanded K: Q is DHt_qk tiles wide while K (the latent) keeps DHt; the reader also pushes the core's head's W_UK
-    // into cb_wuk alongside every Q push. Without it DHt_qk == DHt.
+    // Expanded K: Q is DHt_qk tiles wide while K (the latent) keeps DHt; the reader also pushes this core's rows of its
+    // head's W_UK (kexp_nope_tiles x kexp_latent_tiles tiles per head) into cb_wuk alongside the Q push. Without it
+    // DHt_qk == DHt.
     constexpr bool k_expand = get_named_compile_time_arg_val("k_expand") == 1;
     constexpr uint32_t DHt_qk = get_named_compile_time_arg_val("dht_qk");
     constexpr uint32_t cb_wuk = get_named_compile_time_arg_val("cb_wuk");
-    // Expanded-K head groups (expanded-K PLAN.md section 3.4): the k_expand_group cores of a (K-split band, head) each
-    // expand kexp_own_rows of the 4 no-PE tile rows per K chunk; this reader sends its compute's rows to the peer's
+    constexpr uint32_t wuk_tiles = get_named_compile_time_arg_val("wuk_tiles");
+    constexpr uint32_t kexp_latent_tiles = get_named_compile_time_arg_val("kexp_latent_tiles");
+    constexpr uint32_t kexp_nope_tiles = get_named_compile_time_arg_val("kexp_nope_tiles");
+    // Expanded-K head pairs (expanded-K PLAN.md section 3.4): the two cores of a (K-split band, head) each expand
+    // kexp_own_rows of the no-PE tile rows per K chunk; this reader sends its compute's rows to the peer's
     // cb_kexp_peer and hands the peer's rows to its compute.
-    constexpr uint32_t k_expand_group = get_named_compile_time_arg_val("k_expand_group");
-    constexpr bool k_expand_grouped = k_expand && k_expand_group > 1;
-    constexpr uint32_t kexp_own_rows = 4 / k_expand_group;
+    constexpr uint32_t kexp_own_rows = kexp_nope_tiles / 2;
+    static_assert(!k_expand || wuk_tiles == kexp_own_rows * kexp_latent_tiles);
+    // The op validates [c_kv | k_pe] latent K and [q_nope | q_pe] Q with matching PE widths, so Q has exactly
+    // kexp_nope_tiles tile rows more than the latent's PE part (compute's count).
+    static_assert(!k_expand || DHt_qk + kexp_latent_tiles == DHt + kexp_nope_tiles, "expanded K: Q / latent K widths");
     constexpr uint32_t cb_kexp_own = get_named_compile_time_arg_val("cb_kexp_own");
     constexpr uint32_t cb_kexp_peer = get_named_compile_time_arg_val("cb_kexp_peer");
     constexpr uint32_t kexp_credit_sem = get_named_compile_time_arg_val("kexp_credit_sem");
@@ -533,15 +539,14 @@ void kernel_main() {
     constexpr bool ksplit_enabled = ksplit_count > 1;
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
-    // Expanded K: W_UK's address is the last runtime arg, after the rotated-split pairs or the K-split band
-    // (exclusive).
-    [[maybe_unused]] const uint32_t wuk_arg_idx =
-        rotated_args_base + (rotated_q_split_enabled ? 2 * ring_size : 0) + (ksplit_enabled ? 1 : 0);
+    // Expanded K: [W_UK address, rank, peer physical x, peer physical y] are the last runtime args, after the K-split
+    // band. Head pairs never run the rotated split (the host refuses it).
+    static_assert(!k_expand || !rotated_q_split_enabled);
+    [[maybe_unused]] const uint32_t wuk_arg_idx = rotated_args_base + (ksplit_enabled ? 1 : 0);
     [[maybe_unused]] const uint32_t wuk_addr = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx) : 0;
-    // Head groups: [rank, peer physical x, peer physical y] follow the W_UK address.
-    [[maybe_unused]] const uint32_t kexp_rank = k_expand_grouped ? get_arg_val<uint32_t>(wuk_arg_idx + 1) : 0;
-    [[maybe_unused]] const uint32_t kexp_peer_x = k_expand_grouped ? get_arg_val<uint32_t>(wuk_arg_idx + 2) : 0;
-    [[maybe_unused]] const uint32_t kexp_peer_y = k_expand_grouped ? get_arg_val<uint32_t>(wuk_arg_idx + 3) : 0;
+    [[maybe_unused]] const uint32_t kexp_rank = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 1) : 0;
+    [[maybe_unused]] const uint32_t kexp_peer_x = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 2) : 0;
+    [[maybe_unused]] const uint32_t kexp_peer_y = k_expand ? get_arg_val<uint32_t>(wuk_arg_idx + 3) : 0;
     [[maybe_unused]] uint32_t kexp_exchanged = 0;  // cumulative: semaphores count up and are reset by the launch
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
@@ -1402,15 +1407,11 @@ void kernel_main() {
                     read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                         is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
                     if constexpr (k_expand) {
-                        // This Q chunk's head's W_UK, [128, 512] = 4 x 16 tiles: same lifetime as Q (compute pops both
-                        // together). Only this core's rows of W_UK: rows [rank * own_rows, (rank + 1) * own_rows) of
-                        // its 4 x 16, stored latent-column-major (tile (r, d) at d * own_rows + r) so the expansion's
-                        // matmul block reads a latent column's W_UK rows as adjacent tiles.
-                        constexpr uint32_t wuk_tiles = kexp_own_rows * 16;
-                        // The op validates [c_kv (512) | k_pe] latent K and [q_nope (128) | q_pe] Q with matching PE
-                        // widths, so Q has exactly 4 tile rows more than the latent's PE part (compute's count).
-                        static_assert(
-                            !k_expand || DHt_qk + 16 == DHt + 4, "expanded K: W_UK is 128 x 512 (4 x 16 tiles)");
+                        // This Q chunk's head's W_UK, kexp_nope_tiles x kexp_latent_tiles tiles: same lifetime as Q
+                        // (compute pops both together). Only this core's rows of W_UK: rows
+                        // [rank * own_rows, (rank + 1) * own_rows), stored latent-column-major (tile (r, d) at
+                        // d * own_rows + r) so the expansion's matmul block reads a latent column's W_UK rows as
+                        // adjacent tiles.
                         constexpr uint32_t wuk_tile_bytes = get_tile_size(cb_wuk);
                         const InterleavedAddrGenFast<true> wuk_gen = {
                             .bank_base_address = wuk_addr,
@@ -1419,10 +1420,10 @@ void kernel_main() {
                         cb_reserve_back(cb_wuk, wuk_tiles);
                         const uint32_t wuk_write_ptr = get_write_ptr(cb_wuk);
                         for (uint32_t t = 0; t < wuk_tiles; ++t) {
-                            const uint32_t r = t / 16;
-                            const uint32_t d = t % 16;
+                            const uint32_t r = t / kexp_latent_tiles;
+                            const uint32_t d = t % kexp_latent_tiles;
                             noc_async_read_tile(
-                                nq * 64 + kexp_rank * wuk_tiles + t,
+                                nq * kexp_nope_tiles * kexp_latent_tiles + kexp_rank * wuk_tiles + t,
                                 wuk_gen,
                                 wuk_write_ptr + (d * kexp_own_rows + r) * wuk_tile_bytes);
                         }
@@ -1523,8 +1524,8 @@ void kernel_main() {
                     // Make V available to compute.
                     cb_v.push_back(v_cb_entry_tiles);
 
-                    if constexpr (k_expand_grouped) {
-                        // Exchange this K chunk's expanded rows with the peer. Every core of the group walks the same
+                    if constexpr (k_expand) {
+                        // Exchange this K chunk's expanded rows with the peer. Both cores of the pair walk the same
                         // K chunks and pushes / pops these CBs identically, so the peer's receive slot for this chunk
                         // sits at the same address as this core's own. Credit first (this core's slot is free), so
                         // neither core waits on the other in a cycle.
@@ -1573,7 +1574,7 @@ void kernel_main() {
         }
     }
     synchronize_halo();
-    if constexpr (k_expand_grouped) {
+    if constexpr (k_expand) {
         // The exchange's semaphore increments are non-posted atomics: flush them before the kernel exits.
         noc_async_atomic_barrier();
     }
