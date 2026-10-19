@@ -754,7 +754,7 @@ KvChains build_kv_chains(
     }
 
     // Only configure mcast if ALL multi-core chains are eligible (all-or-nothing)
-    // Multicast only pays off on chains of at least 4 cores. On 2-3-core chains it was 5-28% slower than unicast
+    // Multicast only pays off on chains of at least 4 cores. On 2-3-core chains it was 6-39% slower than unicast
     // (Blackhole, bs1 32/8 S=512, K/V in L1); from 4 cores up it was 2-16% faster.
     constexpr std::size_t kMinMcastChainCores = 4;
     for (const auto& cand : candidates) {
