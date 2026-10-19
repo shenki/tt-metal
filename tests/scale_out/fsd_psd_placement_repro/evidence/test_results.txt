@@ -1,0 +1,8 @@
+# committed PSD mapping
+[1,40]<stdout>:[  PASSED  ] 1 test.
+[1,7]<stdout>:[  PASSED  ] 1 test.
+
+# FSD-derived mapping
+[1,9]<stdout>:[  FAILED  ] ControlPlaneFixture.TestGalaxyLayoutCheck (45654 ms)
+[1,9]<stdout>:[  FAILED  ] 1 test, listed below:
+[1,9]<stdout>:[  FAILED  ] ControlPlaneFixture.TestGalaxyLayoutCheck
