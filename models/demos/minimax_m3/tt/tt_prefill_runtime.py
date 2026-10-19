@@ -695,11 +695,11 @@ class TtPrefillRuntime:
         def _tp_sharded_slot_block(tensor):
             """A TP-deduped cache's slot, re-interleaved to the TP-replicated layout ``[L, 1, sp*rows, hd]``.
 
-            Chip (s, t) holds stripe t (``chunk_local/tp`` rows) of every slab n at local rows
+            Chip (s, t) holds stripe t (``seg/sp/tp`` rows) of every slab n at local rows
             ``n*stripe + i``; the compose stacks the cols on dim 1, so ``host[:, t, s*n_slabs*stripe +
             n*stripe + i]`` moves to ``s*n_slabs*chunk_local + n*chunk_local + t*stripe + i``."""
             sp, tp = self.config.sp_factor, self.mesh_device.shape[kv_cache.index_k_tp_axis]
-            chunk_local = self.config.chunk_size // sp
+            chunk_local = self.config.seg // sp  # the KV block-cyclic period is one segment
             stripe = chunk_local // tp
             assert rows % chunk_local == 0, f"read of {rows} rows/chip is not a whole number of {chunk_local}-row slabs"
             n_slabs = rows // chunk_local
