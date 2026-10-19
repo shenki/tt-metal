@@ -129,6 +129,9 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
             cache_dtype=ttnn.bfloat8_b,
         )
 
+    def kv_token_caches(self, kv_caches):
+        return {"k": kv_caches.k, "v": kv_caches.v}
+
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the model + runtime for this rank.
 

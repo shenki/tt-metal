@@ -140,6 +140,9 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             head_dim=hf_config.head_dim,
         )
 
+    def kv_token_caches(self, kv_caches):
+        return {"k": kv_caches.k, "v": kv_caches.v, "index_k": kv_caches.index_k}
+
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the M3 model and return the runtime. Weights load from the tilized cache when it is
         complete (empty state_dict, ~869GB bf16 source never read — DeepSeek's state_dict={} trick);

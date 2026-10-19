@@ -127,6 +127,11 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             ]
         )
 
+    def kv_token_caches(self, kv_caches):
+        cache = kv_caches[0]
+        caches = {"k": cache.k, "v": cache.v, "k_sliding": cache.k_sliding, "v_sliding": cache.v_sliding}
+        return {name: tensor for name, tensor in caches.items() if tensor is not None}
+
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
         cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into

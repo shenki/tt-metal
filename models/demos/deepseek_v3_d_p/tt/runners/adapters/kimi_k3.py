@@ -178,6 +178,12 @@ class KimiK3Adapter(MLAPrefillAdapter):
             kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
         return KimiK3KvCaches(kvpe=kvpe, kda_states=kda_states)
 
+    def kv_state_caches(self, kv_caches):
+        states = kv_caches.kda_states
+        if states is None:
+            return {}
+        return {"kda_recurrent": states.recurrent, "kda_convolution": states.convolution}
+
     def layer_split_boundaries(self, num_layers: int):
         """Pipeline ranks may only start on an AttnRes block boundary.
 

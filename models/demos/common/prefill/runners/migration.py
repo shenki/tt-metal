@@ -3,7 +3,6 @@
 
 
 import glob
-import json
 import os
 import socket
 import sys
@@ -492,51 +491,6 @@ def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer
             }
         )
     return stages
-
-
-def kv_page_pool_path() -> str:
-    return os.path.splitext(migration_table_path())[0] + "_page_pool.json"
-
-
-def publish_kv_page_pool(pool, mesh_device, mesh_shape, *, rank: int, num_slots: int):
-    path = kv_page_pool_path()
-    if rank == 0 and os.path.exists(path):
-        os.remove(path)
-    has_pool = ttnn.distributed_context_allgather_int(int(pool is not None))
-    if not all(has_pool):
-        if rank == 0:
-            logger.warning(f"[migration] KV page pool missing on ranks {[r for r, h in enumerate(has_pool) if not h]}")
-        return None
-
-    kinds = []
-    for kind, tensor in pool.pages.items():
-        stages = allgather_kv_stage_layout(mesh_device, tensor.buffer_address(), mesh_shape, 0, tensor.shape[0])
-        kinds.append(
-            {
-                "kind": kind,
-                "head_dim": tensor.shape[-1],
-                "chunk_bytes": pool.chunk_bytes[kind],
-                "stages": [
-                    {
-                        "rank": st["rank"],
-                        "base_addr": st["base_addr"],
-                        "num_pages": st["count"],
-                        "num_banks": st["num_banks"],
-                        "host_tag": st["host_tag"],
-                        "fnids": [[[int(f.mesh_id), int(f.chip_id)] for f in row] for row in st["fnids"]],
-                    }
-                    for st in stages
-                ],
-            }
-        )
-    all_users = ttnn.distributed_context_allgather_int(int(pool.num_users))
-    if rank != 0:
-        return None
-    doc = {"num_slots": num_slots, "page_rows": pool.page_rows, "num_users": min(all_users), "pools": kinds}
-    with open(path, "w") as f:
-        json.dump(doc, f, indent=2)
-    logger.info(f"[migration] KV page pool ({min(all_users)} users) -> {path}")
-    return path
 
 
 def get_num_dram_banks(mesh_device):

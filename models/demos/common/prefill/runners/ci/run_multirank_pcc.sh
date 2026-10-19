@@ -90,6 +90,7 @@ case "${MODEL}" in
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     # Deliberately only the first 55k: the K3 golden trace is currently unreliable.
     PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+    REQUEST_LEN=1049600
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -98,9 +99,7 @@ case "${MODEL}" in
     # PP_RANKS, so the next pipeline-parallel model sets only that.
     PP_RANKS=4
     # Validates the entire 36-layer golden, including positions >8192.
-    MAX_SEQ_LEN=${GOLDEN_LEN}
-    # sc1 is the only config, so the sc1 window below must not widen it to the 256k default.
-    SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
+    REQUEST_LEN=${GOLDEN_LEN}
     MISTRAL_MODEL="${PREFILL_HF_MODEL:-/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603}"
     MISTRAL_CACHE="${PREFILL_TTNN_CACHE:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI}"
     MISTRAL_GOLDEN="${PREFILL_TRACE_DIR:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L}"

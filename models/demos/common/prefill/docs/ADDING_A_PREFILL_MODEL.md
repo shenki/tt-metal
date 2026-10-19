@@ -75,6 +75,15 @@ class MyModelAdapter(PrefillModelAdapter):
         runtime call that touches it, and frees it with the mesh at shutdown. `params` carries
         max_seq_len / mesh_shape / this rank's num_layers / num_users / ... ."""
 
+    def kv_token_caches(self, kv_caches: KvCaches) -> dict:
+        """Every per-token cache tensor in `kv_caches`, keyed by kind (e.g. {"kvpe": ..., "index": ...}).
+        Dim 0 holds num_slots users and dim 2 the per-device token rows. The runner checks each one
+        starts every slot on DRAM bank 0 and allocates a page pool shaped like it."""
+
+    def kv_state_caches(self, kv_caches: KvCaches) -> dict:
+        """Per-user state tensors that are not indexed by token (e.g. Kimi-K3's KDA recurrent and
+        convolution states). Optional; the default returns {}."""
+
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return the runtime handle (section 2).
         The runtime is stateless w.r.t. the KV cache — it receives the engine-owned cache
@@ -85,7 +94,7 @@ class MyModelAdapter(PrefillModelAdapter):
         — read them instead of os.environ."""
 ```
 
-That is the entire adapter contract — four methods plus the attributes. The adapter is
+That is the entire adapter contract — five methods (plus the optional `kv_state_caches`) and the attributes. The adapter is
 a factory + descriptor; it performs no device work or comms itself, and it does not
 hold the cache (the engine does).
 
@@ -257,8 +266,17 @@ swapping the manifest. (The runner reads only the manifest's `env` block; see `_
 and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
 `PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
 `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
-both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 11 chunks) and
+both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 16 chunks) and
 must be ≥ `chunks * PREFILL_CHUNK_SIZE`, else the runner asserts when a chunk overruns a slot.
+
+**KV slots and the page pool** — the runner allocates one KV slot per pipeline rank, so slot ids run
+`[0, num_ranks)`. After compile it fills the remaining DRAM with a page pool shaped like each
+`kv_token_caches` / `kv_state_caches` tensor and publishes it next to the KV chunk table as
+`<table>_page_pool.json` for the inference server to copy pages from. `PREFILL_NUM_USERS` is a floor on
+slots plus pool users at `PREFILL_MAX_SEQ_LEN`, and the runner fails at startup below it.
+`PREFILL_KV_POOL_HEADROOM_MB` (default 256) is left free. Each token cache's per-device rows must be a
+multiple of 32 × the DRAM bank count so every slot starts on bank 0; the runner names the
+`PREFILL_MAX_SEQ_LEN` multiple to use when it is not.
 
 ```bash
 # terminal A — runner (creates the H2D service, exports the descriptor, serves):
@@ -287,7 +305,7 @@ and blocks on its ready, so the endpoint must be up (see
 ## Checklist
 
 - [ ] Adapter implements every abstract `PrefillModelAdapter` method (incl.
-      `allocate_kv_cache`); `name`, `model_config`, and the default paths are set.
+      `allocate_kv_cache` and `kv_token_caches`); `name`, `model_config`, and the default paths are set.
 - [ ] `build_runtime` returns a runtime satisfying the section-2 interface (cache
       passed in, not stored).
 - [ ] No reference-modeling / heavy imports at module load (lazy inside methods).

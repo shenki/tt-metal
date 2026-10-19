@@ -983,73 +983,6 @@ def populate_kv_chunk_address_table_kda(
     return lookup_table
 
 
-def bank_aligned_seq_len_quantum(stripes: int, num_dram_banks: int) -> int:
-    return math.lcm(stripes * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * num_dram_banks, PREFILL_CHUNK_TOKENS)
-
-
-def _kv_nd_shard_mem_config(mesh_device, head_dim):
-    num_dram_banks = get_num_dram_banks(mesh_device)
-    core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
-    ]
-    grid = ttnn.CoreRangeSet(core_ranges)
-
-    kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
-        grid=grid,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    kv_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.DRAM,
-        nd_shard_spec=kv_nd_shard_spec,
-    )
-    return kv_mem_config
-
-
-def _stamp_kv_topology(tensor, mesh_device, full_mesh, tp_axis):
-    if full_mesh or tp_axis is not None:
-        # A cache sharded on dim 2 across BOTH mesh axes has the same declared distribution whether it got
-        # there via full_mesh (one snake ring) or via tp_axis (SP x TP dedup): row-major over the mesh IS
-        # the sp*tp linearization.
-        #
-        # DRAMZeroFill is an in-place generic op whose output follows the allocator's default replicated
-        # topology, so stamp the intended distribution after the fill.
-        #
-        # full_mesh: one canonical row-major sequence shard per coordinate.
-        #
-        # tp_axis: a TP-deduped cache is genuinely dim-2 sharded across both axes (each chip holds
-        # seq_len/(sp*tp) rows in sp*tp row-major order), so declaring it 1-D Replicate below would be a
-        # lie the ops can no longer tolerate -- high_bw_all_gather validates cluster_axis against the
-        # declared distribution rank and rejects an axis gather on a rank-1 topology, which is what broke
-        # the indexer's TP leg. Declaring the real distribution also leaves placements[sp_axis] sharded
-        # after that gather replicates placements[tp_axis], which is exactly the post-gather layout.
-        dist_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
-        coords = [
-            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
-            for coord in ttnn.MeshCoordinateRange(dist_shape)
-        ]
-        tensor.update_tensor_topology(
-            ttnn.TensorTopology(dist_shape, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
-        )
-        return
-
-    # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
-    # of the model produces replicated tensors via ReplicateTensorToMesh, which is a 1D
-    # MeshShape(num_devices) with a single Replicate placement. Reproduce that exactly: a 1D
-    # distribution_shape + single Replicate, with mesh_coords being the 2D physical device
-    # coordinates (row-major), matching what the ReplicateTensorToMesh mapper emits.
-    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
-    dist_shape = ttnn.MeshShape([num_devices])
-    placements = [ttnn.PlacementReplicate()]
-    physical_mesh_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
-    coords = [
-        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
-        for coord in ttnn.MeshCoordinateRange(physical_mesh_shape)
-    ]
-    tensor.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
-
-
 def init_kvpe_cache(
     kvpe_cache_head_dim,
     mesh_device,
@@ -1062,7 +995,6 @@ def init_kvpe_cache(
     layout=ttnn.TILE_LAYOUT,
     full_mesh=False,
     tp_axis=None,
-    bank_aligned=False,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -1108,20 +1040,41 @@ def init_kvpe_cache(
     seq_len_local = seq_len // stripes
 
     num_dram_banks = get_num_dram_banks(mesh_device)
-    if bank_aligned:
-        quantum = bank_aligned_seq_len_quantum(stripes, num_dram_banks)
-        assert seq_len % quantum == 0, (
-            f"seq_len ({seq_len}) must be a multiple of {quantum} ({quantum // PREFILL_CHUNK_TOKENS} chunks) for "
-            f"{stripes} stripes over {num_dram_banks} DRAM banks, else slots start on different banks; nearest "
-            f"valid: {seq_len // quantum * quantum or quantum}, {(seq_len // quantum + 1) * quantum}"
-        )
-    kv_mem_config = _kv_nd_shard_mem_config(mesh_device, kvpe_cache_head_dim)
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
+    ]
+    grid = ttnn.CoreRangeSet(core_ranges)
+
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
+        grid=grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=kv_nd_shard_spec,
+    )
 
     # Allocate + zero on device. The host from_torch path packs the full replicated
     # cache as bfp8 on host, overflowing pack_as_bfp8_tiles' 32-bit page index at high
     # num_users; a device kernel zeros it instead with no host transfer. Allocating
     # directly in the requested dtype/layout also sidesteps the mesh-mapper from_torch
     # path that forces TILE for fp8_e4m3 (so fp8 rides on ROW_MAJOR).
+    # A cache sharded on dim 2 across BOTH mesh axes has the same declared distribution whether it got
+    # there via full_mesh (one snake ring) or via tp_axis (SP x TP dedup): row-major over the mesh IS
+    # the sp*tp linearization. Build that topology once and stamp it for either mode.
+    row_major_seq_topology = None
+    if full_mesh or tp_axis is not None:
+        dist_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+        coords = [
+            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+            for coord in ttnn.MeshCoordinateRange(dist_shape)
+        ]
+        row_major_seq_topology = ttnn.TensorTopology(
+            dist_shape, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords
+        )
+
     kvpe_cache = ttnn.allocate_tensor_on_device(
         ttnn.Shape([num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]),
         dtype,
@@ -1130,33 +1083,38 @@ def init_kvpe_cache(
         kv_mem_config,
     )
     DRAMZeroFill.op(kvpe_cache)
-    _stamp_kv_topology(kvpe_cache, mesh_device, full_mesh, tp_axis)
+
+    if row_major_seq_topology is not None:
+        # DRAMZeroFill is an in-place generic op whose output follows the allocator's default replicated
+        # topology, so stamp the intended distribution after the fill.
+        #
+        # full_mesh: one canonical row-major sequence shard per coordinate.
+        #
+        # tp_axis: a TP-deduped cache is genuinely dim-2 sharded across both axes (each chip holds
+        # seq_len/(sp*tp) rows in sp*tp row-major order), so declaring it 1-D Replicate below would be a
+        # lie the ops can no longer tolerate -- high_bw_all_gather validates cluster_axis against the
+        # declared distribution rank and rejects an axis gather on a rank-1 topology, which is what broke
+        # the indexer's TP leg. Declaring the real distribution also leaves placements[sp_axis] sharded
+        # after that gather replicates placements[tp_axis], which is exactly the post-gather layout.
+        kvpe_cache.update_tensor_topology(row_major_seq_topology)
+        return kvpe_cache
+
+    # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
+    # of the model produces replicated tensors via ReplicateTensorToMesh, which is a 1D
+    # MeshShape(num_devices) with a single Replicate placement. Reproduce that exactly: a 1D
+    # distribution_shape + single Replicate, with mesh_coords being the 2D physical device
+    # coordinates (row-major), matching what the ReplicateTensorToMesh mapper emits.
+    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+    dist_shape = ttnn.MeshShape([num_devices])
+    placements = [ttnn.PlacementReplicate()]
+    physical_mesh_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+        for coord in ttnn.MeshCoordinateRange(physical_mesh_shape)
+    ]
+    kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
+
     return kvpe_cache
-
-
-def kv_page_rows(num_dram_banks: int) -> int:
-    return NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * num_dram_banks
-
-
-def init_kv_page_pool(
-    head_dim,
-    mesh_device,
-    num_pages,
-    dtype=ttnn.bfloat8_b,
-    layout=ttnn.TILE_LAYOUT,
-    full_mesh=False,
-    tp_axis=None,
-):
-    page_rows = kv_page_rows(get_num_dram_banks(mesh_device))
-    pool = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([num_pages, 1, page_rows, head_dim]),
-        dtype,
-        layout,
-        mesh_device,
-        _kv_nd_shard_mem_config(mesh_device, head_dim),
-    )
-    _stamp_kv_topology(pool, mesh_device, full_mesh, tp_axis)
-    return pool
 
 
 def init_mla_kv_cache(
@@ -1171,7 +1129,6 @@ def init_mla_kv_cache(
     num_users=1,
     full_mesh=False,
     tp_axis=None,
-    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -1197,7 +1154,6 @@ def init_mla_kv_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
-        bank_aligned=bank_aligned,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 

@@ -103,6 +103,16 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             prefill_chunk_size=params.chunk_size,
         )
 
+    def kv_token_caches(self, kv_caches):
+        caches = {}
+        for i, (layer, layer_type) in enumerate(zip(kv_caches.layers, kv_caches.layer_types)):
+            if layer_type == "full_attention":
+                caches[f"kv.{i}"] = layer.kv
+            else:
+                caches[f"k.{i}"] = layer.k
+                caches[f"v.{i}"] = layer.v
+        return caches
+
     def build_runtime(self, *, mesh_device, hf_config, params):
         validate_params(params)
         from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime

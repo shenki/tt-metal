@@ -105,14 +105,6 @@ class KvCaches(ABC):
     growing/renaming a model's caches never touches it."""
 
 
-@dataclass(frozen=True)
-class KvPagePool:
-    pages: dict
-    chunk_bytes: dict
-    num_users: int
-    page_rows: int
-
-
 class PrefillModelAdapter(ABC):
     """Per-model plumbing the prefill engine needs. One instance per model.
 
@@ -149,7 +141,6 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
-    supports_kv_page_pool: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
@@ -222,15 +213,12 @@ class PrefillModelAdapter(ABC):
         ``KvCaches``). ``params`` carries the per-rank knobs (max_seq_len, mesh_shape, this rank's
         num_layers, num_users, …)."""
 
-    def allocate_kv_page_pool(
-        self,
-        *,
-        mesh_device: "ttnn.MeshDevice",
-        params: PrefillRunParams,
-        kv_caches: KvCaches,
-        budget_bytes_per_bank: int,
-    ) -> Optional[KvPagePool]:
-        return None
+    @abstractmethod
+    def kv_token_caches(self, kv_caches: KvCaches) -> dict:
+        ...
+
+    def kv_state_caches(self, kv_caches: KvCaches) -> dict:
+        return {}
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of

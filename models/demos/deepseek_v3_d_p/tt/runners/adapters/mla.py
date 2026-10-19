@@ -112,6 +112,14 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             )
         )
 
+    def kv_token_caches(self, kv_caches):
+        caches = {}
+        if kv_caches.kvpe is not None:
+            caches["kvpe"] = kv_caches.kvpe.storage
+        if kv_caches.index is not None:
+            caches["index"] = kv_caches.index
+        return caches
+
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)
         is stateless w.r.t. the KV cache — the engine allocates it (allocate_kv_cache) and

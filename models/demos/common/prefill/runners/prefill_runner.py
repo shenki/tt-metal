@@ -15,11 +15,16 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners.kv_page_pool import (
+    allocate_kv_page_pool,
+    check_bank_aligned,
+    publish_kv_page_pool,
+)
 from models.demos.common.prefill.runners.migration import (
+    get_num_dram_banks,
     migration_file_export_enabled,
     migration_publish_enabled,
     migration_table_path,
-    publish_kv_page_pool,
     setup_kv_chunk_table,
 )
 from models.demos.common.prefill.runners.runner_utils import (
@@ -97,7 +102,7 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 KV_POOL_HEADROOM_MB = int(os.environ.get("PREFILL_KV_POOL_HEADROOM_MB", 256))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
@@ -635,7 +640,7 @@ def main() -> None:
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
-    num_slots = num_ranks if ADAPTER.supports_kv_page_pool else NUM_USERS
+    num_slots = num_ranks
     logger.info(
         f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
@@ -681,9 +686,12 @@ def main() -> None:
             f"PREFILL_USE_TRACE=1 but runtime {type(runtime).__name__} does not implement "
             "capture_trace(kv_caches); run with PREFILL_USE_TRACE=0."
         )
+    dram_before = _dram_allocated_per_bank(mesh_device)
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    bytes_per_user = (_dram_allocated_per_bank(mesh_device) - dram_before) // num_slots
+    check_bank_aligned(ADAPTER.kv_token_caches(kv_caches), get_num_dram_banks(mesh_device), MAX_SEQ_LEN, CHUNK_SIZE)
     runtime.compile(kv_caches)
-    kv_page_pool = _allocate_kv_page_pool(mesh_device, params, kv_caches, rank, num_slots)
+    kv_page_pool = _allocate_kv_page_pool(mesh_device, kv_caches, bytes_per_user, rank, num_slots)
 
     _serve_request(runtime, kv_caches, kv_page_pool, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
@@ -696,19 +704,25 @@ def main() -> None:
     logger.info(f"[pp rank {rank}] shutdown complete")
 
 
-def _allocate_kv_page_pool(mesh_device, params, kv_caches, rank: int, num_slots: int):
-    if not ADAPTER.supports_kv_page_pool:
-        return None
+def _dram_allocated_per_bank(mesh_device) -> int:
+    return ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank
+
+
+def _allocate_kv_page_pool(mesh_device, kv_caches, bytes_per_user: int, rank: int, num_slots: int):
     free_bytes = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).largest_contiguous_bytes_free_per_bank
     budget = max(0, free_bytes - KV_POOL_HEADROOM_MB * 1024 * 1024)
-    pool = ADAPTER.allocate_kv_page_pool(
-        mesh_device=mesh_device, params=params, kv_caches=kv_caches, budget_bytes_per_bank=budget
+    pool_users = budget // bytes_per_user if bytes_per_user > 0 else 0
+    pool = allocate_kv_page_pool(
+        mesh_device,
+        ADAPTER.kv_token_caches(kv_caches),
+        ADAPTER.kv_state_caches(kv_caches),
+        num_slots=num_slots,
+        num_users=pool_users,
     )
-    pool_users = pool.num_users if pool is not None else 0
     logger.info(
-        f"[pp rank {rank}] KV page pool: {pool_users} users at max_seq_len={MAX_SEQ_LEN} + {num_slots} slots "
-        f"(free {free_bytes / 2**20:.1f} MiB/bank, headroom {KV_POOL_HEADROOM_MB} MiB)"
-        + (f", pages {', '.join(f'{k}={t.shape[0]}' for k, t in pool.pages.items())}" if pool is not None else "")
+        f"[pp rank {rank}] KV page pool: {pool_users} users + {num_slots} slots at max_seq_len={MAX_SEQ_LEN} "
+        f"({bytes_per_user / 2**20:.1f} MiB/bank per user, free {free_bytes / 2**20:.1f} MiB/bank, "
+        f"headroom {KV_POOL_HEADROOM_MB} MiB)"
     )
     if num_slots + pool_users < NUM_USERS:
         raise RuntimeError(
@@ -907,10 +921,7 @@ def _serve_request(
         first_layer_idx=first_layer_idx,
         num_my_layers=num_my_layers,
     )
-    if ADAPTER.supports_kv_page_pool:
-        publish_kv_page_pool(
-            kv_page_pool, mesh_device, GLOBAL_MESH_SHAPE, rank=rank, num_slots=runtime.config.num_users
-        )
+    publish_kv_page_pool(kv_page_pool, mesh_device, rank=rank, num_slots=runtime.config.num_users)
 
     def _capture_trace() -> None:
         if d2d_out is not None:
