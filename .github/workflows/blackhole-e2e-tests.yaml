@@ -39,6 +39,7 @@ on:
         options:
           - all
           - bh-lb-disaggregated-prefill-perf
+          - bh-qb2-disaggregated-prefill-perf
           - bh-qb2-disaggregated-prefill-d2d-socket-sync
       build-type:
         required: false
