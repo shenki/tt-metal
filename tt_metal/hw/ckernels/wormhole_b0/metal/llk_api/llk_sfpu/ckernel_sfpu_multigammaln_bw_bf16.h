@@ -8,7 +8,7 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline sfpi::vFloat template_reciprocal(const sfpi::vFloat in) {
+sfpi_inline sfpi::vFloat _multigammaln_bw_reciprocal_(const sfpi::vFloat in) {
     // A quadratic seed on the mantissa in [1, 2), two Newton steps and the exponent's complement.
     sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
     sfpi::vFloat y = 1.4545459747314453f + 0.323232501745224f * negative_x;
@@ -62,7 +62,7 @@ inline void calculate_multigammaln_bw_bf16() {
         vFloat v10 = v12;
         v_if(v12 < 1.0f) { v10 = v11; }
         v_endif;
-        vFloat v9 = template_reciprocal(v10);
+        vFloat v9 = _multigammaln_bw_reciprocal_(v10);
         vFloat v3 = v4 * v9;
         vFloat x22 = dst_reg[d];
         vFloat v21 = x22 - vFloat(1.5f);
@@ -138,7 +138,7 @@ inline void calculate_multigammaln_bw_bf16() {
         }
         v_endif;
         vFloat v44 = v45 - v47;
-        vFloat v43 = template_reciprocal(v44);
+        vFloat v43 = _multigammaln_bw_reciprocal_(v44);
         vFloat v33 = v2 - v34 * v43;
         vFloat v32 = vFloat(std::numeric_limits<float>::quiet_NaN());
         vFloat x50 = dst_reg[d];
