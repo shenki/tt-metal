@@ -50,6 +50,7 @@ EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
 SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
+REQUEST_LEN=""
 
 case "${MODEL}" in
   llama31)
@@ -68,6 +69,7 @@ case "${MODEL}" in
     PCC_THRESHOLD=0.83
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
+    REQUEST_LEN=1044480
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -141,12 +143,16 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
-echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
-REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+SC1_REQUEST_LEN=${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}
+SC4_REQUEST_LEN=${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}
+REQUEST_LEN=${REQUEST_LEN:-${MAX_SEQ_LEN}}
+echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} request_len=${REQUEST_LEN} num_users=${NUM_USERS}"
 
-SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
-SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
+REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))
+
+SC1_CHUNKS=$((SC1_REQUEST_LEN / CHUNK_SIZE))
+SC4_CHUNKS=$((SC4_REQUEST_LEN / CHUNK_SIZE))
 # Start, ~50k, and the midpoint + tail of each config's window. Deduped: a model with one config
 # yields the same chunk twice.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" \

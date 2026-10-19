@@ -983,6 +983,10 @@ def populate_kv_chunk_address_table_kda(
     return lookup_table
 
 
+def bank_aligned_seq_len_quantum(stripes: int, num_dram_banks: int) -> int:
+    return math.lcm(stripes * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * num_dram_banks, PREFILL_CHUNK_TOKENS)
+
+
 def init_kvpe_cache(
     kvpe_cache_head_dim,
     mesh_device,
@@ -995,6 +999,7 @@ def init_kvpe_cache(
     layout=ttnn.TILE_LAYOUT,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -1040,6 +1045,13 @@ def init_kvpe_cache(
     seq_len_local = seq_len // stripes
 
     num_dram_banks = get_num_dram_banks(mesh_device)
+    if bank_aligned:
+        quantum = bank_aligned_seq_len_quantum(stripes, num_dram_banks)
+        assert seq_len % quantum == 0, (
+            f"seq_len ({seq_len}) must be a multiple of {quantum} ({quantum // PREFILL_CHUNK_TOKENS} chunks) for "
+            f"{stripes} stripes over {num_dram_banks} DRAM banks, else slots start on different banks; nearest "
+            f"valid: {seq_len // quantum * quantum or quantum}, {(seq_len // quantum + 1) * quantum}"
+        )
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
@@ -1129,6 +1141,7 @@ def init_mla_kv_cache(
     num_users=1,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -1154,6 +1167,7 @@ def init_mla_kv_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
+        bank_aligned=bank_aligned,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 
