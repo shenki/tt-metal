@@ -8,18 +8,37 @@
 
 #include <cstdint>
 
-#include "api/compute/bcast.h"
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
-enum class ElementwiseOperation { ADD, SUBTRACT };
+namespace ckl = compute_kernel_lib;
+
 enum class ChunkInputPolicy { RETAIN, CONSUME };
+
+constexpr uint32_t dst_tiles =
+    ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+
+// Elementwise inputs remain resident: the enclosing step waits for and pops their windows.
+constexpr ckl::InputSpec resident(uint32_t dfb_id) {
+    return ckl::input(dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+}
+
+// Each elementwise step reserves and publishes its whole output. PACK state persists across steps; the caller
+// reconfigures it only where the destination format changes.
+constexpr ckl::OutputSpec published(uint32_t dfb_id) {
+    return ckl::output(dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+}
+
+// Batch each destination-register synchronization.
+constexpr ckl::IterationShape dst_blocks(uint32_t tiles) {
+    return ckl::IterationShape::tiles(tiles).block_size(dst_tiles);
+}
 
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut>
 FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
@@ -53,140 +72,50 @@ FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
     output.push_back(Mt * Nt);
 }
 
-// Inputs remain resident; PacketTiles specifies output publication granularity.
-template <
-    ElementwiseOperation Operation,
-    uint32_t Count,
-    uint32_t PacketTiles,
-    typename DFBA,
-    typename DFBB,
-    typename DFBOut>
-FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
-    static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t output_id = output.get_id();
-    reconfig_data_format(a_id, b_id);
-    if constexpr (Operation == ElementwiseOperation::ADD) {
-        add_init(a_id, b_id);
-    } else {
-        sub_init(a_id, b_id);
-    }
-    for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
-        output.reserve_back(PacketTiles);
-        for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
-            const uint32_t count = first + dst_tiles <= PacketTiles ? dst_tiles : PacketTiles - first;
-            const uint32_t input_start = packet + first;
-            tile_regs_acquire();
-            if constexpr (Operation == ElementwiseOperation::ADD) {
-                add_block(a_id, b_id, input_start, input_start, 0, count);
-            } else {
-                sub_block(a_id, b_id, input_start, input_start, 0, count);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t tile = 0; tile < count; ++tile) {
-                pack_tile(tile, output_id, first + tile);
-            }
-            tile_regs_release();
-        }
-        output.push_back(PacketTiles);
-    }
-}
-
-template <uint32_t Count, uint32_t PacketTiles, typename DFBIn, typename DFBOut>
-FORCE_INLINE void copy(DFBIn& input, DFBOut& output) {
-    static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    const uint32_t input_id = input.get_id();
-    const uint32_t output_id = output.get_id();
-    reconfig_data_format_srca(input_id);
-    copy_init(input_id);
-    for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
-        output.reserve_back(PacketTiles);
-        for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
-            const uint32_t count = first + dst_tiles <= PacketTiles ? dst_tiles : PacketTiles - first;
-            tile_regs_acquire();
-            for (uint32_t tile = 0; tile < count; ++tile) {
-                copy_tile(input_id, packet + first + tile, tile);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t tile = 0; tile < count; ++tile) {
-                pack_tile(tile, output_id, first + tile);
-            }
-            tile_regs_release();
-        }
-        output.push_back(PacketTiles);
-    }
-}
-
-// difference[path * Vt + v] = values[v] - projection[path * Vt + v] for one tile row of Paths value groups.
-template <uint32_t Vt, uint32_t Paths, typename DFBValues, typename DFBProjection, typename DFBDifference>
-FORCE_INLINE void subtract_from_values(DFBValues& values, DFBProjection& projection, DFBDifference& difference) {
-    constexpr uint32_t count = Vt * Paths;
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    const uint32_t values_id = values.get_id();
-    const uint32_t projection_id = projection.get_id();
-    const uint32_t difference_id = difference.get_id();
-    reconfig_data_format(values_id, projection_id);
-    sub_init(values_id, projection_id);
-    difference.reserve_back(count);
-    for (uint32_t first = 0; first < count; first += dst_tiles) {
-        const uint32_t block = first + dst_tiles <= count ? dst_tiles : count - first;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block; ++tile) {
-            sub_tiles(values_id, projection_id, (first + tile) % Vt, first + tile, tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < block; ++tile) {
-            pack_tile(tile, difference_id, first + tile);
-        }
-        tile_regs_release();
-    }
-    difference.push_back(count);
-}
-
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
 // state whose first Vt columns hold B. Publish (A + B) - B, or copy B, one tile row of Vt tiles per packet.
-template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows, typename DFBPair, typename DFBOut>
+template <
+    bool Difference,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t PacketRows,
+    uint32_t PairDfb,
+    uint32_t OutputDfb,
+    typename DFBPair,
+    typename DFBOut>
 FORCE_INLINE void extract_paths(DFBPair& pair, DFBOut& output) {
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     static_assert(Kt % PacketRows == 0 && PacketRows * Vt <= dst_tiles);
-    const uint32_t pair_id = pair.get_id();
-    const uint32_t output_id = output.get_id();
-    if constexpr (Difference) {
-        reconfig_data_format(pair_id, pair_id);
-        sub_init(pair_id, pair_id);
-    } else {
-        reconfig_data_format_srca(pair_id);
-        copy_init(pair_id);
-    }
+    constexpr uint32_t pair_columns = 2 * Vt;
+    // Walk the packet's PacketRows x Vt tiles of one path; the other path sits Vt tiles to the right in each row.
+    constexpr auto packet = ckl::IterationShape::grid(PacketRows, Vt).block_size(Vt);
+    constexpr ckl::InputSpec pair_rows = ckl::input(
+        PairDfb,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Strided);
+    // The packet window is reserved and published around the chain.
+    using PackPacket = ckl::PackTile<ckl::output(
+        OutputDfb, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::DataFormatReconfig::Disabled)>;
     for (uint32_t first_row = 0; first_row < Kt; first_row += PacketRows) {
+        const uint32_t b_tile = first_row * pair_columns;
         output.reserve_back(PacketRows * Vt);
-        tile_regs_acquire();
-        for (uint32_t row = 0; row < PacketRows; ++row) {
-            for (uint32_t value = 0; value < Vt; ++value) {
-                const uint32_t b_tile = (first_row + row) * 2 * Vt + value;
-                if constexpr (Difference) {
-                    sub_tiles(pair_id, pair_id, b_tile + Vt, b_tile, row * Vt + value);
-                } else {
-                    copy_tile(pair_id, b_tile, row * Vt + value);
-                }
-            }
+        if constexpr (Difference) {
+            ckl::eltwise_chain(
+                packet,
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, pair_rows, pair_rows>{
+                    pair,
+                    pair,
+                    ckl::StridedTileRange{b_tile + Vt, pair_columns},
+                    ckl::StridedTileRange{b_tile, pair_columns}},
+                PackPacket{output});
+        } else {
+            ckl::eltwise_chain(
+                packet,
+                ckl::CopyTile<pair_rows>{pair, ckl::StridedTileRange{b_tile, pair_columns}},
+                PackPacket{output});
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < PacketRows * Vt; ++tile) {
-            pack_tile(tile, output_id, tile);
-        }
-        tile_regs_release();
         output.push_back(PacketRows * Vt);
     }
 }
@@ -196,6 +125,8 @@ template <
     uint32_t Ct,
     uint32_t Kt,
     uint32_t Vt,
+    uint32_t StateProjectionDfb,
+    uint32_t DifferenceDfb,
     uint32_t Paths = 1,
     typename DFBState,
     typename DFBKd,
@@ -230,11 +161,16 @@ FORCE_INLINE void compute_value_new(
         v_beta.wait_front(chunk_value_tiles);
     }
     if constexpr (Paths == 1) {
-        elementwise<ElementwiseOperation::SUBTRACT, chunk_value_tiles, chunk_value_tiles>(
-            v_beta, state_projection, difference);
+        ckl::sub<resident(dfb::v_beta), resident(StateProjectionDfb), published(DifferenceDfb)>(
+            dst_blocks(chunk_value_tiles), v_beta, state_projection, difference);
     } else {
         static_assert(Ct == 1, "paired summaries take one tile row per chunk");
-        subtract_from_values<Vt, Paths>(v_beta, state_projection, difference);
+        // difference[path * Vt + v] = values[v] - projection[path * Vt + v] for one tile row of Paths value groups.
+        ckl::sub<
+            ckl::input(dfb::v_beta, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Row),
+            resident(StateProjectionDfb),
+            published(DifferenceDfb)>(
+            ckl::IterationShape::grid(Paths, Vt).block_size(dst_tiles), v_beta, state_projection, difference);
     }
     difference.wait_front(chunk_state_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
@@ -256,6 +192,9 @@ template <
     uint32_t Ct,
     uint32_t Kt,
     uint32_t Vt,
+    uint32_t StateProjectionDfb,
+    uint32_t ValueProjectionDfb,
+    uint32_t OutputDfb,
     typename DFBState,
     typename DFBCorrected,
     typename DFBQDecay,
@@ -283,44 +222,51 @@ FORCE_INLINE void compute_chunk_output(
     matrix_multiply<Ct, Ct, Vt>(intra, corrected_value, value_projection);
     value_projection.wait_front(chunk_value_tiles);
     intra.pop_front(chunk_chunk_tiles);
-    pack_reconfig_data_format(output.get_id());
-    elementwise<ElementwiseOperation::ADD, chunk_value_tiles, chunk_value_tiles>(
-        state_projection, value_projection, output);
+    // The output format differs from the FP32 internal format, so the add reconfigures PACK for it.
+    ckl::add<
+        resident(StateProjectionDfb),
+        resident(ValueProjectionDfb),
+        ckl::output(OutputDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+        dst_blocks(chunk_value_tiles), state_projection, value_projection, output);
     state_projection.pop_front(chunk_value_tiles);
     value_projection.pop_front(chunk_value_tiles);
 }
 
-template <typename DFBState, typename DFBDecay, typename DFBOut>
-FORCE_INLINE void multiply_by_decay(
-    DFBState& state, DFBDecay& decay, DFBOut& output, uint32_t key_tiles, uint32_t value_tiles) {
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    const uint32_t count = key_tiles * value_tiles;
-    const uint32_t state_id = state.get_id();
-    const uint32_t decay_id = decay.get_id();
-    const uint32_t output_id = output.get_id();
+// update_state selects its source and destination buffers per chunk and dispatches to one of two compile-time
+// specializations of each step below. They stay out of line so the chunk loop keeps a single call site per step.
 
-    output.reserve_back(count);
-    reconfig_data_format(state_id, decay_id);
-    mul_bcast_cols_init(state_id, decay_id);
+// output[key, v] = state[key, v] * decay[key], broadcasting the decay column across each state tile row.
+template <
+    uint32_t StateDfb,
+    uint32_t KeyTiles,
+    uint32_t ValueTiles,
+    typename DFBState,
+    typename DFBDecay,
+    typename DFBOut>
+__attribute__((noinline)) void multiply_by_decay(DFBState& state, DFBDecay& decay, DFBOut& output) {
     // Batch independent tiles to amortize destination-register lifecycle overhead.
-    for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
-        const uint32_t remaining = count - block_start;
-        const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            const uint32_t index = block_start + tile;
-            const uint32_t key = index / value_tiles;
-            mul_tiles_bcast_cols(state_id, decay_id, index, key, tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, output_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    output.push_back(count);
+    ckl::mul<
+        resident(StateDfb),
+        ckl::input(
+            dfb::final_decay,
+            ckl::BroadcastDim::Col,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::InputTileMapping::Col),
+        published(dfb::state_temporary)>(
+        ckl::IterationShape::grid(KeyTiles, ValueTiles).block_size(dst_tiles), state, decay, output);
+}
+
+template <
+    uint32_t DestinationDfb,
+    uint32_t Tiles,
+    typename DFBStateTemporary,
+    typename DFBStateUpdate,
+    typename DFBDestination>
+__attribute__((noinline)) void add_state_update(
+    DFBStateTemporary& state_temporary, DFBStateUpdate& state_update, DFBDestination& destination) {
+    ckl::add<resident(dfb::state_temporary), resident(dfb::state_update), published(DestinationDfb)>(
+        dst_blocks(Tiles), state_temporary, state_update, destination);
 }
 
 template <
@@ -354,10 +300,19 @@ FORCE_INLINE void update_state(
     DataflowBuffer state_temporary(dfb::state_temporary);
     matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, corrected_value, state_update);
     state_update.wait_front(key_value_tiles);
-    multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);
+    // The chunk reads either the seed state or the state ring and writes either the ring or the final state. Helper
+    // buffer identities are compile-time, so each elementwise step dispatches on the buffer selected for this chunk.
+    if (current_state.get_id() == dfb::state) {
+        multiply_by_decay<dfb::state, Kt, Vt>(current_state, final_decay, state_temporary);
+    } else {
+        multiply_by_decay<dfb::state_ring, Kt, Vt>(current_state, final_decay, state_temporary);
+    }
     state_temporary.wait_front(key_value_tiles);
-    elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
-        state_temporary, state_update, destination);
+    if (destination.get_id() == dfb::final_state) {
+        add_state_update<dfb::final_state, key_value_tiles>(state_temporary, state_update, destination);
+    } else {
+        add_state_update<dfb::state_ring, key_value_tiles>(state_temporary, state_update, destination);
+    }
     state_temporary.pop_front(key_value_tiles);
     state_update.pop_front(key_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
@@ -404,20 +359,20 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         t_inv.wait_front(chunk_chunk_tiles);
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
-        compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt, 2>(
+        compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt, dfb::scratch, dfb::value_new, 2>(
             current, kd, v_beta, t_inv, scratch, value_new, scratch);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, pair_columns>(
             current, last ? final_state : state_ring, scratch, k_decay_transposed, final_decay);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_ring.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
-            extract_paths<true, Kt, Vt, 1>(state_ring, summary_head_output);
-            extract_paths<false, Kt, Vt, 1>(state_ring, summary_head_state);
+            extract_paths<true, Kt, Vt, 1, dfb::state_ring, dfb::summary_head_output>(state_ring, summary_head_output);
+            extract_paths<false, Kt, Vt, 1, dfb::state_ring, dfb::summary_head_state>(state_ring, summary_head_state);
             pack_reconfig_data_format(dfb::state_ring);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
             state.wait_front(key_pair_tiles);
-            copy<key_pair_tiles, key_pair_tiles>(state, state_ring);
+            ckl::copy<resident(dfb::state), published(dfb::state_ring)>(dst_blocks(key_pair_tiles), state, state_ring);
             state_ring.pop_front(key_pair_tiles);
             state.pop_front(key_pair_tiles);
         }
@@ -431,8 +386,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     pack_reconfig_data_format(output.get_id());
     constexpr uint32_t packet_rows = kda::largest_divisor_at_most(
         Kt, ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>() / Vt);
-    extract_paths<true, Kt, Vt, packet_rows>(final_state, output);
-    extract_paths<false, Kt, Vt, packet_rows>(final_state, transport_state);
+    extract_paths<true, Kt, Vt, packet_rows, dfb::final_state, dfb::output>(final_state, output);
+    extract_paths<false, Kt, Vt, packet_rows, dfb::final_state, dfb::transport_state>(final_state, transport_state);
     final_state.pop_front(key_pair_tiles);
 }
 
@@ -466,15 +421,16 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         if (reset_chunk != 0 && chunk == reset_chunk) {
             state_ring.wait_front(key_value_tiles);
             tail_entry_states.wait_front(key_value_tiles);
-            copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
+            ckl::copy<resident(dfb::tail_entry_states), published(dfb::state_ring)>(
+                dst_blocks(key_value_tiles), tail_entry_states, state_ring);
             state_ring.pop_front(key_value_tiles);
             tail_entry_states.pop_front(key_value_tiles);
         }
         auto& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
-        compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
+        compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt, dfb::scratch, dfb::output_intermediate>(
             current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
-        compute_chunk_output<Ct, Kt, Vt>(
+        compute_chunk_output<Ct, Kt, Vt, dfb::output_intermediate, dfb::scratch, dfb::output>(
             current_state, value_new, q_decay, intra, output_intermediate, scratch, output);
 
         pack_reconfig_data_format(dfb::state_ring);

@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/reconfig_data_format.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 template <uint32_t block_ct, uint32_t Mt>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
@@ -23,7 +24,39 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer partial(dfb::partial);
     DataflowBuffer output(dfb::output);
-    silu_tile_init();
+
+    // Every tap multiplies the activation block by its row-broadcast tap weights. Weights are held for the run of
+    // items that share a channel block, so their window stays caller-owned and is addressed at the tap's offset.
+    using ActivationTimesWeights = ckl::BinaryFpu<
+        ckl::BinaryFpuOp::Mul,
+        ckl::input(dfb::act_tile, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::input(
+            dfb::weights,
+            ckl::BroadcastDim::Row,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
+            ckl::InputTileMapping::Block,
+            ckl::DataFormatReconfig::Enabled,
+            ckl::TileAddressing::Offset)>;
+    // Later taps add the previous taps' BF16 partial sum in DST.
+    using AddPartial = ckl::DestReuseBinary<
+        ckl::BinaryFpuOp::Add,
+        ckl::input(dfb::partial, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::DestReuseType::DEST_TO_SRCB>;
+    // The packer keeps the configuration left by tilize; reserve and publish dst_tiles per destination acquire.
+    using PackPartial = ckl::PackTile<ckl::output(
+        dfb::partial,
+        ckl::ReservePolicy::PerBlockSize,
+        ckl::PushPolicy::PerBlockSize,
+        ckl::DataFormatReconfig::Disabled)>;
+    using PackOutput = ckl::PackTile<ckl::output(
+        dfb::output,
+        ckl::ReservePolicy::PerBlockSize,
+        ckl::PushPolicy::PerBlockSize,
+        ckl::DataFormatReconfig::Disabled)>;
+    // Process dst_tiles channel tiles per destination acquire; every tile still sees the same multiply, BF16 partial
+    // add and final SiLU as a one-tile loop.
+    constexpr auto shape = ckl::IterationShape::tiles(block_ct).block_size(dst_tiles);
 
     // Work items are channel-block-major; the reader queues tap weights once per run of items
     // that share a channel block.
@@ -35,51 +68,24 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
         }
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
             compute_kernel_lib::tilize<block_ct, dfb::act_rm, dfb::act_tile>(1);
-            activation.wait_front(block_ct);
-
-            const bool is_final_tap = tap + 1 == tap_count;
-            const uint32_t destination_dfb = is_final_tap ? dfb::output : dfb::partial;
-            auto& destination = is_final_tap ? output : partial;
-            if (tap != 0) {
-                partial.wait_front(block_ct);
+            const uint32_t weights_base = tap * block_ct;
+            if (tap == 0) {
+                ckl::eltwise_chain(
+                    shape, ActivationTimesWeights{activation, weights, 0, weights_base}, PackPartial{partial});
+            } else if (tap + 1 == tap_count) {
+                ckl::eltwise_chain(
+                    shape,
+                    ActivationTimesWeights{activation, weights, 0, weights_base},
+                    AddPartial{partial},
+                    ckl::Silu<>{},
+                    PackOutput{output});
+            } else {
+                ckl::eltwise_chain(
+                    shape,
+                    ActivationTimesWeights{activation, weights, 0, weights_base},
+                    AddPartial{partial},
+                    PackPartial{partial});
             }
-
-            // Process dst_tiles channel tiles per destination acquire; every tile still sees the
-            // same multiply, BF16 partial add and final SiLU as a one-tile loop.
-            for (uint32_t ct = 0; ct < block_ct; ct += dst_tiles) {
-                destination.reserve_back(dst_tiles);
-                tile_regs_acquire();
-                reconfig_data_format_srca(dfb::act_tile);
-                reconfig_data_format_srcb(dfb::weights);
-                mul_bcast_rows_init(dfb::act_tile, dfb::weights);
-                for (uint32_t i = 0; i < dst_tiles; ++i) {
-                    mul_tiles_bcast_rows(dfb::act_tile, dfb::weights, ct + i, tap * block_ct + ct + i, i);
-                }
-                if (tap != 0) {
-                    reconfig_data_format_srca(dfb::partial);
-                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb::partial);
-                    for (uint32_t i = 0; i < dst_tiles; ++i) {
-                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb::partial, ct + i, i);
-                    }
-                }
-                if (is_final_tap) {
-                    for (uint32_t i = 0; i < dst_tiles; ++i) {
-                        silu_tile(i);
-                    }
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                for (uint32_t i = 0; i < dst_tiles; ++i) {
-                    pack_tile(i, destination_dfb);
-                }
-                destination.push_back(dst_tiles);
-                tile_regs_release();
-            }
-            if (tap != 0) {
-                partial.pop_front(block_ct);
-            }
-            activation.pop_front(block_ct);
         }
         if (item + 1 == wi_count || (work + 1) / Mt != block) {
             weights.pop_front(tap_count * block_ct);

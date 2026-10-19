@@ -11,6 +11,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 constexpr uint32_t largest_common_divisor_at_most(uint32_t lhs, uint32_t rhs, uint32_t limit) {
     for (uint32_t divisor = limit; divisor > 1; --divisor) {
@@ -161,29 +164,20 @@ FORCE_INLINE void matmul_affine(ADFB& a, AffineDFB& affine, LocalBDFB& local_b, 
     out_b.push_back(Mt * Vt);
 }
 
-template <typename InDFB, typename OutDFB>
-FORCE_INLINE void copy(InDFB& in, OutDFB& out, uint32_t tiles) {
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    const uint32_t in_id = in.get_id();
-    const uint32_t out_id = out.get_id();
-    out.reserve_back(tiles);
-    reconfig_data_format_srca(in_id);
-    copy_init(in_id);
-    for (uint32_t first_tile = 0; first_tile < tiles; first_tile += dst_tiles) {
-        const uint32_t batch_tiles = first_tile + dst_tiles <= tiles ? dst_tiles : tiles - first_tile;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < batch_tiles; ++tile) {
-            copy_tile(in_id, first_tile + tile, tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < batch_tiles; ++tile) {
-            pack_tile(tile, out_id, first_tile + tile);
-        }
-        tile_regs_release();
-    }
-    out.push_back(tiles);
+// Copies read a window the caller waits for and pops, and publish their whole output at once. The packer keeps the
+// internal format configured at startup.
+constexpr ckl::InputSpec caller_owned(uint32_t dfb_id) {
+    return ckl::input(dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+}
+
+constexpr ckl::OutputSpec published(uint32_t dfb_id) {
+    return ckl::output(dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+}
+
+// Each destination acquire copies as many tiles as DST holds.
+constexpr ckl::IterationShape copy_shape(uint32_t tiles) {
+    return ckl::IterationShape::tiles(tiles).block_size(
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>());
 }
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
@@ -224,22 +218,27 @@ TT_KERNEL void compute(uint32_t group) {
         const bool aligned_reset = topology.split_in_group(G) == 0;
         tail_entry_states.wait_front(affine_b_tiles);
         if (aligned_reset) {
-            copy(tail_entry_states, reset_b, affine_b_tiles);
+            ckl::copy<caller_owned(dfb::tail_entry_states), published(dfb::reset_b)>(
+                copy_shape(affine_b_tiles), tail_entry_states, reset_b);
         } else {
             tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
             matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_entry_states, reset_b);
         }
         reset_b.wait_front(affine_b_tiles);
-        copy(initial_a, to_remote_a, affine_a_tiles);
-        copy(reset_b, to_remote_b, affine_b_tiles);
+        ckl::copy<caller_owned(dfb::initial_a), published(dfb::to_remote_a)>(
+            copy_shape(affine_a_tiles), initial_a, to_remote_a);
+        ckl::copy<caller_owned(dfb::reset_b), published(dfb::to_remote_b)>(
+            copy_shape(affine_b_tiles), reset_b, to_remote_b);
         reset_b.pop_front(affine_b_tiles);
         if (!aligned_reset) {
             tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
         }
         tail_entry_states.pop_front(affine_b_tiles);
     } else {
-        copy(initial_a, to_remote_a, affine_a_tiles);
-        copy(initial_b, to_remote_b, affine_b_tiles);
+        ckl::copy<caller_owned(dfb::initial_a), published(dfb::to_remote_a)>(
+            copy_shape(affine_a_tiles), initial_a, to_remote_a);
+        ckl::copy<caller_owned(dfb::initial_b), published(dfb::to_remote_b)>(
+            copy_shape(affine_b_tiles), initial_b, to_remote_b);
     }
     initial_a.pop_front(affine_a_tiles);
     if (!reset_worker) {
@@ -261,7 +260,8 @@ TT_KERNEL void compute(uint32_t group) {
 
     initial_state.wait_front(affine_b_tiles);
     if (group == 0) {
-        copy(initial_state, final, affine_b_tiles);
+        ckl::copy<caller_owned(dfb::initial_state), published(dfb::final)>(
+            copy_shape(affine_b_tiles), initial_state, final);
     } else {
         from_remote_affine.wait_front(affine_a_tiles + affine_b_tiles);
         matmul_add_affine_b<Kt, Kt, Vt>(from_remote_affine, initial_state, final);

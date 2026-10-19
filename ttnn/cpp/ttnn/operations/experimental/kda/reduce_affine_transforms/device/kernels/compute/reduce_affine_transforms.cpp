@@ -6,12 +6,13 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 // FP32 half-DST holds four 32x32 output tiles. Production's four-tile output rows fit exactly and use
 // matmul_block; wider rows retain the tile loop because a row-major B operand cannot be column-sliced as a block
@@ -70,55 +71,6 @@ void matmul_product(DFBA& a, DFBB& b, DFBOut& out, DFBSend* send) {
     }
 }
 
-template <typename DFBA, typename DFBB, typename DFBOut, typename DFBSend>
-void add(DFBA& a, DFBB& b, DFBOut& out, DFBSend& send, uint32_t tiles) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t out_id = out.get_id();
-    const uint32_t send_id = send.get_id();
-    out.reserve_back(tiles);
-    send.reserve_back(tiles);
-    // The preceding LLK operation is matmul. Establish add's source state before consuming its independently queued
-    // operands; the packer remains configured for the canonical FP32 internal format.
-    reconfig_data_format(a_id, b_id);
-    add_init(a_id, b_id);
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        tile_regs_acquire();
-        add_tiles(a_id, b_id, tile, tile, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, out_id, tile);
-        pack_tile(0, send_id, tile);
-        tile_regs_release();
-    }
-    out.push_back(tiles);
-    send.push_back(tiles);
-}
-
-template <typename DFBIn, typename DFBOut, typename DFBSend>
-void copy(DFBIn& in, DFBOut& out, DFBSend& send, uint32_t tiles) {
-    const uint32_t in_id = in.get_id();
-    const uint32_t out_id = out.get_id();
-    const uint32_t send_id = send.get_id();
-    out.reserve_back(tiles);
-    send.reserve_back(tiles);
-    // Initial summaries may be BF16 while stage and send buffers use the canonical FP32 internal format. Copy updates
-    // the source format; startup already configured the packer for the internal format.
-    reconfig_data_format_srca(in_id);
-    copy_init(in_id);
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        tile_regs_acquire();
-        copy_tile(in_id, tile, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, out_id, tile);
-        pack_tile(0, send_id, tile);
-        tile_regs_release();
-    }
-    out.push_back(tiles);
-    send.push_back(tiles);
-}
-
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
@@ -146,8 +98,28 @@ TT_KERNEL void compute(uint32_t group) {
     }
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);
-    copy(initial_a, stage_a, send_a, a_tiles);
-    copy(initial_b, stage_b, send_b, b_tiles);
+    // Initial summaries may be BF16 while stage and send buffers use the canonical FP32 internal format. Each copy
+    // updates the source format; startup already configured the packer for the internal format.
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(a_tiles),
+        ckl::CopyTile<ckl::input(
+            dfb::initial_a, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{initial_a},
+        ckl::PackTile<ckl::output(
+            dfb::stage_a, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+            stage_a},
+        ckl::PackTile<ckl::output(
+            dfb::send_a, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+            send_a});
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(b_tiles),
+        ckl::CopyTile<ckl::input(
+            dfb::initial_b, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{initial_b},
+        ckl::PackTile<ckl::output(
+            dfb::stage_b, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+            stage_b},
+        ckl::PackTile<ckl::output(
+            dfb::send_b, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+            send_b});
     initial_a.pop_front(a_tiles);
     initial_b.pop_front(b_tiles);
 
@@ -170,7 +142,21 @@ TT_KERNEL void compute(uint32_t group) {
         matmul_product<Kt, Kt, Kt>(stage_a, remote_a, stage_a, &send_a);
         matmul_product<Kt, Kt, Vt>(stage_a, remote_b, scratch, static_cast<decltype(&send_a)>(nullptr));
         scratch.wait_front(b_tiles);
-        add(scratch, stage_b, stage_b, send_b, b_tiles);
+        // The preceding LLK operation is matmul. The add establishes its own source state before consuming its
+        // independently queued operands; the packer remains configured for the canonical FP32 internal format.
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(b_tiles),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::scratch, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+                ckl::input(dfb::stage_b, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{
+                scratch, stage_b},
+            ckl::PackTile<ckl::output(
+                dfb::stage_b, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+                stage_b},
+            ckl::PackTile<ckl::output(
+                dfb::send_b, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+                send_b});
         stage_a.pop_front(a_tiles);
         stage_b.pop_front(b_tiles);
         remote_a.pop_front(a_tiles);
