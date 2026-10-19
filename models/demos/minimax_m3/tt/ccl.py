@@ -17,8 +17,10 @@ L1_SMALL_SIZE = 1152
 
 # Packed-forward MSA overlap (tt/attention/msa.py msa_segments_pipelined): the bottom rows of the grid carry the
 # K/V/index_k gather workers, the rows above run the block selection and sparse attention. Two rows (22-24 cores
-# on the galaxy grids) hold high_bw_all_gather's 4-worker tier at 2 links (get_msa_overlap checks it). The op
-# test of the schedule carves the same strip (tests/ttnn/.../test_high_bw_all_gather.py _msa_overlap_grids).
+# on the galaxy grids) hold high_bw_all_gather's 4-worker tier at 2 links (get_msa_overlap checks it). Bottom
+# rather than top keeps the compute rectangle at its (0, 0) origin; a top strip measured 1-2% slower per packed
+# chunk on both stages. The op test of the schedule carves the same strip
+# (tests/ttnn/.../test_high_bw_all_gather.py _msa_overlap_grids).
 MSA_GATHER_ROWS = 2
 
 
