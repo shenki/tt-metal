@@ -215,7 +215,8 @@
     # Dispatch/combine perf remains disabled pending issue #47287.
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_loudbox -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
-    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP2xTP4" -vvv --tb=short || exit_code=$?
+    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP1" -vvv --tb=short || exit_code=$?
+    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "linear" -vvv --tb=short || exit_code=$?
     # Mistral Small 4 MoE and MLA at the PP=4 stage shape (SP=8 x TP=1). This LoudBox job builds
     # with Tracy; both rows are gated against a LoudBox baseline.
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
@@ -259,12 +260,12 @@
   budget_type: e2e
 
 - id: bh-qb2-disaggregated-prefill-perf
-  name: Disaggregated prefill Kimi-K3 MLA perf tests (QuietBox)
+  name: Disaggregated prefill Kimi-K3 MLA and KDA perf tests (QuietBox)
   model-name: disaggregated_prefill
   cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit_code=$?
-    exit $exit_code
+    pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit $?
+    KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP1" -vvv --tb=short || exit $?
+    KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -vvv --tb=short || exit $?
   skus:
     bh_quietbox_2:
       timeout: 10
