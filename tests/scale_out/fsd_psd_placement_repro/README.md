@@ -17,6 +17,11 @@ test** with each route's mapping and compare **two things**:
 2. the **actual placement file the ControlPlane generates** —
    `<logs>/generated/fabric/asic_to_fabric_node_mapping_rank_<r>_of_70.yaml`.
 
+> **Fixing this?** See [`FSD_LAYOUT_CHECK_HANDOFF.md`](FSD_LAYOUT_CHECK_HANDOFF.md)
+> for the code-level root cause (schema gaps → synthesized board revision /
+> grouping / chip order), confirmed-vs-hypothesized mechanisms, and a prioritized
+> fix plan with file:line anchors.
+
 ## TL;DR result
 
 | Route | `ControlPlaneFixture.TestGalaxyLayoutCheck` |
