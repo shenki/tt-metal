@@ -608,7 +608,11 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
+    this->noc_stream_remote_src_reg_index_ = 0;                              // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->risc_soft_reset_addr_ = 0;                                         // TODO: add correct value
+    this->wall_clock_low_addr_ = 0;                                          // TODO: add correct value
+    this->wall_clock_high_addr_ = 0;                                         // TODO: add correct value
     this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
