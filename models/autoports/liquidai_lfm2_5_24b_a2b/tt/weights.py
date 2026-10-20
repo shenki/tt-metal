@@ -8,6 +8,7 @@ layout ``[out, in]``). ``load_layer_state_dict`` returns one decoder layer's ten
 """
 
 import json
+import re
 from pathlib import Path
 
 import torch
@@ -118,10 +119,16 @@ class WeightCache:
 
     @staticmethod
     def checkpoint_fingerprint(model_path):
-        """Resolved checkpoint directory + (name, size, mtime) of every safetensors shard and the index: a different or
-        re-downloaded snapshot selects a new cache key."""
+        """Content identity of every safetensors shard and the index, independent of where the checkpoint is mounted:
+        in a Hugging Face cache snapshot each file is a symlink to a blob named by its content hash, so the host and a
+        container (or another machine) that see the same revision select the same cache key. Files that are not HF
+        cache symlinks to hash-named blobs fall back to (name, size, mtime) under the resolved directory."""
         p = Path(model_path).resolve()
         files = sorted(p.glob("*.safetensors")) + [p / "model.safetensors.index.json"]
+        targets = [(f.name, f.resolve().name) for f in files if f.exists() and f.is_symlink()]
+        if targets and len(targets) == sum(f.exists() for f in files):
+            if all(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", t) for _, t in targets):
+                return tuple(targets)
         return (str(p), tuple((f.name, f.stat().st_size, int(f.stat().st_mtime)) for f in files if f.exists()))
 
     def scope(self, name):
