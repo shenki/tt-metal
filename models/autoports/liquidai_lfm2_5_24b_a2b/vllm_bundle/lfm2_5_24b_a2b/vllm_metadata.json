@@ -1,0 +1,4 @@
+{
+  "arch": "Lfm2MoeForCausalLM",
+  "main_class": "models.autoports.liquidai_lfm2_5_24b_a2b.tt.generator_vllm:TTLfm2MoeForCausalLM"
+}

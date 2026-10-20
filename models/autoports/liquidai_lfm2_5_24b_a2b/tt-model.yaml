@@ -1,0 +1,115 @@
+# tt-model container (v5.1) package for LiquidAI/LFM2.5-24B-A2B on 4x Blackhole p150.
+# Build: tt-model package --container models/autoports/liquidai_lfm2_5_24b_a2b/tt-model.yaml --out ~/tt-model-builds
+schema: "5.1"
+
+repo: joel000/lfm2.5-24b-a2b-p150x4
+name: lfm2.5-24b-a2b-p150x4
+weights: {repo: LiquidAI/LFM2.5-24B-A2B, revision: 1769516ac588c4c558089c94f27d96b0dc67b183}  # = tt/model_config.py HF_REVISION
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  # Local tree: carries the multicast all_gather route-alternation fix the serving path needs.
+  tt_metal: /home/ttuser/liquid-LFM2.5-24B-A2B/tt-metal
+  code:
+    - models/common
+    - models/autoports/liquidai_lfm2_5_24b_a2b/__init__.py
+    - models/autoports/liquidai_lfm2_5_24b_a2b/tt
+    - models/autoports/liquidai_lfm2_5_24b_a2b/vllm_bundle
+    # tt/precision.py falls back to the baseline policy silently when this is missing.
+    - models/autoports/liquidai_lfm2_5_24b_a2b/doc/datatype_sweep/selected_precision_config.json
+  extra_code:
+    # tt/generator.py subclasses readiness_check.contract.Generator (tt-model-bringup runtime).
+    - root: /home/ttuser/.claude/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.19/runtime
+      paths: [readiness_check/__init__.py, readiness_check/contract.py]
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.30.0"}
+  # Local branch lfm2/text-only-mamba-align-chunked-mm: keeps chunked-MM input for
+  # text-only Mamba-align models, which prefix caching on this hybrid model needs.
+  plugin: {path: /home/ttuser/liquid-LFM2.5-24B-A2B/vllm-tt-plugin}
+  extra_models_dir: models/autoports/liquidai_lfm2_5_24b_a2b/vllm_bundle
+  # The validated host venv, minus local installs (ttnn, vllm, plugin) and fiftyone,
+  # whose pins conflict with vLLM's sse-starlette and which the serve path never imports.
+  lock: requirements.lock
+
+serve:
+  port: 8000
+  hardware: p150x4
+  mesh_device: P150x4
+  max_num_seqs: 32
+  block_size: 64
+  max_model_len: 131072
+  capabilities:
+    tool_parser: lfm2
+    reasoning_parser: deepseek_r1
+  additional_config:
+    tt:
+      sample_on_device_mode: all
+      trace_region_size: 805306368
+      l1_small_size: 24576
+      prefill_chunk_alignment: 2048
+      decode_interleave_prefill_steps: 1
+  env:
+    HF_HUB_OFFLINE: "1"
+    # Device-layout weight cache (~54 GB) on the persistent tensor-cache mount.
+    LFM2_WEIGHT_CACHE: /tensor-cache/lfm2_5_24b_a2b
+  args:
+    - --enable-prefix-caching
+    # Clients that send no top_k would otherwise get the checkpoint's 50, which is host-sampled.
+    - [--override-generation-config, '{"top_k": 32}']
+
+verify:
+  - "import models.autoports.liquidai_lfm2_5_24b_a2b.tt.generator_vllm as m; assert m.TTLfm2MoeForCausalLM"
+  - "from models.autoports.liquidai_lfm2_5_24b_a2b.tt import precision as p; assert p.SELECTED_PATH.is_file(), f'{p.SELECTED_PATH} missing: would serve at the baseline precision'"
+  - "import readiness_check.contract"
+  - "import vllm; assert vllm.__version__.startswith('0.30.0'), vllm.__version__"
+
+card:
+  attribution: Derived from LiquidAI/LFM2.5-24B-A2B by Liquid AI, unmodified weights.
+  description: >
+    A 24B-parameter mixture-of-experts model with 2B active parameters per token: a hybrid
+    decoder of 30 gated short-convolution layers and 10 grouped-query attention layers. It
+    is an instruct model with reasoning and tool calling, served with vLLM.
+  intended_use: >
+    Chat, tool calling and reasoning for a few concurrent users, with up to 32 concurrent
+    requests and a 131,072-token context. Prefix caching is on, so agents that resend a
+    long shared prefix get a shorter time to first token.
+  quickstart: |
+    ### Sampling
+    Thinking is on by default: the reasoning arrives in `reasoning_content`, the answer in
+    `content`. Requests with `top_k` up to 32 (the served default) sample on device; a
+    `top_k` from 33 to 64 falls back to a slower host sampler.
+  performance: |
+    | eval | this package | reference | prompts |
+    | --- | --- | --- | --- |
+    | GPQA Diamond (CoT zero-shot, flexible extract) | 70.31 | 74.42 | 128 of 198 |
+    | IFEval (prompt-level strict) | 97.27 | 96.75 | 256 of 541 |
+    | Teacher-forced top-1 / top-5 token agreement with the HF model | 99 % / 100 % | — | 400 tokens |
+
+    | profile | ISL | OSL | concurrency | N | TTFT (ms) | prefill tok/s/u | decode tok/s/u | E2EL (s) |
+    | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+    | default | 4096 | 128 | 1 | 8 | 322 | 12,740 | 107.1 | 1.51 |
+    | default | 4096 | 128 | 32 | 96 | 2,368 (median 644) | 1,730 | 10.5 | 14.4 |
+
+    Means unless noted, measured on p150x4 with the same serving configuration and prefix
+    caching off; evals with lm-eval 0.4.13 at temperature 0.6, top_k 32 and up to 32,768 output tokens,
+    against the scores Liquid AI publishes for the full datasets.
+  limitations: |
+    - Text only.
+    - Only p150x4 (a 1x4 mesh of Blackhole p150 boards) is supported.
+    - The evals ran on fixed subsets (128 GPQA Diamond questions, 256 IFEval prompts), single sample.
+      10 of the 128 GPQA answers reached the 32,768-token output cap without a final answer.
+    - The first boot compiles kernels and converts the weights into a ~54 GB device-layout
+      cache under the tensor-cache directory; later boots reuse it.
+    - Requests with `top_k` above 32 are sampled on the host and decode more slowly.
+  licensing: >
+    The weights are under Liquid AI's LFM Open License v1.0. The TTNN port and serving code in
+    `code/` are Apache-2.0.
+  license:
+    id: other
+    name: LFM Open License v1.0
+    link: https://huggingface.co/LiquidAI/LFM2.5-24B-A2B/blob/main/LICENSE
+  base_model: [LiquidAI/LFM2.5-24B-A2B]
