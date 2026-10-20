@@ -27,9 +27,9 @@ source:
 
 runtime:
   vllm: {version: "0.30.0"}
-  # Local branch lfm2/text-only-mamba-align-chunked-mm: keeps chunked-MM input for
+  # Branch lfm2/text-only-mamba-align-chunked-mm: keeps chunked-MM input for
   # text-only Mamba-align models, which prefix caching on this hybrid model needs.
-  plugin: {path: /home/ttuser/liquid-LFM2.5-24B-A2B/vllm-tt-plugin}
+  plugin: {repo: https://github.com/shenki/vllm-tt-plugin, ref: 108d50054da818b6d9f7208c3d1d274d858c4ab8}
   extra_models_dir: models/autoports/liquidai_lfm2_5_24b_a2b/vllm_bundle
   # The validated host venv, minus local installs (ttnn, vllm, plugin) and fiftyone,
   # whose pins conflict with vLLM's sse-starlette and which the serve path never imports.
@@ -79,8 +79,8 @@ card:
     long shared prefix get a shorter time to first token.
   quickstart: |
     ### Sampling
-    Thinking is on by default: the reasoning arrives in `reasoning_content`, the answer in
-    `content`. Requests with `top_k` up to 32 (the served default) sample on device; a
+    Thinking is on by default: the reasoning arrives in the message's `reasoning` field, the
+    answer in `content`. Requests with `top_k` up to 32 (the served default) sample on device; a
     `top_k` from 33 to 64 falls back to a slower host sampler.
   performance: |
     | eval | this package | reference | prompts |
